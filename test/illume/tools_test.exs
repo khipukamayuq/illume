@@ -37,6 +37,26 @@ defmodule Illume.ToolsTest do
     test "an allowed name reaches the real implementation" do
       assert {:ok, _files} = Tools.dispatch("search_files", %{"pattern" => "*.exs"}, File.cwd!())
     end
+
+    test "git_show's revision is rejected before it ever reaches git, on either backend" do
+      assert {:error, message} =
+               Tools.dispatch(
+                 "git_show",
+                 %{"revision" => "--output=/tmp/illume-hardening-pass-test"},
+                 File.cwd!()
+               )
+
+      assert message =~ "invalid revision"
+      refute File.exists?("/tmp/illume-hardening-pass-test")
+
+      assert {:error, ^message} =
+               Tools.dispatch(
+                 "git_show",
+                 %{"revision" => "--output=/tmp/illume-hardening-pass-test"},
+                 File.cwd!(),
+                 :mcp
+               )
+    end
   end
 
   describe "specs/0" do

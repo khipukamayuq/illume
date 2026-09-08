@@ -65,14 +65,22 @@ defmodule Illume.Tools.GitTest do
     assert {:error, _message} = Git.git_show(tmp_dir, %{"revision" => "not-a-real-revision"})
   end
 
-  test "git_show rejects a revision that looks like a flag", %{tmp_dir: tmp_dir} do
+  test "git_show does not itself validate the revision — that's Illume.Tools.validate_input/3's job",
+       %{tmp_dir: tmp_dir} do
     init_repo(tmp_dir)
     commit!(tmp_dir, "a.txt", "hello", "add a.txt")
 
+    # git's own `--` only disambiguates paths from revisions — it doesn't
+    # shield a revision from being parsed as a flag, so a leading-dash
+    # revision reaching git_show/2 directly (bypassing Tools.dispatch/4)
+    # is git's own problem, not this function's. Confirmed safe here only
+    # because git rejects this particular unrecognized option itself;
+    # Illume.Tools.validate_input/3 is what actually has to catch this
+    # before it ever reaches here — see tools_test.exs.
     assert {:error, message} =
              Git.git_show(tmp_dir, %{"revision" => "--upload-pack=touch /tmp/pwned"})
 
-    assert message =~ "invalid revision"
+    assert message =~ "unrecognized argument"
   end
 
   test "git_show requires a revision" do

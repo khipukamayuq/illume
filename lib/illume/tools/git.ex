@@ -23,15 +23,17 @@ defmodule Illume.Tools.Git do
 
   @doc """
   Show a single commit's message and diff. `input` is
-  `%{"revision" => git_revision}`.
+  `%{"revision" => git_revision}`. Assumes `revision` has already been
+  validated by `Illume.Tools.validate_input/3` (it never reaches here
+  otherwise via `Illume.Tools.dispatch/4`) — git's own `--` only
+  disambiguates paths from revisions, it doesn't shield a revision
+  argument from being parsed as a flag the way `--` does for
+  `Illume.Tools.Grep.grep_content/2`'s pattern, so a leading-dash check
+  before this point is load-bearing, not optional defense-in-depth.
   """
   @spec git_show(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
   def git_show(target_dir, %{"revision" => revision}) do
-    if String.starts_with?(revision, "-") do
-      {:error, "invalid revision: #{revision}"}
-    else
-      run(target_dir, ["show", "--stat", "-p", revision])
-    end
+    run(target_dir, ["show", "--stat", "-p", revision])
   end
 
   def git_show(_target_dir, _input), do: {:error, "missing required input: revision"}
