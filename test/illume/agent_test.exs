@@ -21,6 +21,19 @@ defmodule Illume.AgentTest do
      }}
   end
 
+  defp tool_use_response_multi(specs) do
+    content =
+      Enum.map(specs, fn {name, input, id} ->
+        %{"type" => "tool_use", "id" => id, "name" => name, "input" => input}
+      end)
+
+    {:ok, %{"content" => content, "stop_reason" => "tool_use"}}
+  end
+
+  defp mcp_text_result(text) do
+    {:ok, %{result: %{"content" => [%{"type" => "text", "text" => text}]}, is_error: false}}
+  end
+
   defp start_agent(opts) do
     pid = start_supervised!({Agent, Keyword.put_new(opts, :client, ClientMock)})
     allow(ClientMock, self(), pid)
@@ -216,5 +229,45 @@ defmodule Illume.AgentTest do
 
     assert {:error, :busy} = Agent.ask(pid, "second question")
     assert {:ok, "done"} = Task.await(task)
+  end
+
+  test "runs multiple tool_use calls in one turn concurrently, preserving request order",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response_multi([
+        {"read_file", %{"path" => "a.txt"}, "toolu_1"},
+        {"git_log", %{}, "toolu_2"}
+      ])
+    end)
+
+    expect(ClientMock, :create, fn params ->
+      assert [_question, _assistant, %{role: "user", content: [first, second]}] = params.messages
+      assert first.tool_use_id == "toolu_1"
+      assert second.tool_use_id == "toolu_2"
+      text_response("done")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp)
+    allow(Illume.Tools.MCP.ClientMock, self(), pid)
+
+    # The first-requested tool (toolu_1) sleeps far longer than the
+    # second (toolu_2) — if ordering were determined by completion time
+    # rather than genuinely preserved by `ordered: true`, toolu_2 would
+    # land first in the result and this test would catch it.
+    stub(Illume.Tools.MCP.ClientMock, :call_tool, fn
+      Illume.MCP.FilesystemClient, "read_text_file", _args ->
+        Process.sleep(300)
+        mcp_text_result("slow file contents")
+
+      Illume.MCP.GitClient, "git_log", _args ->
+        Process.sleep(80)
+        mcp_text_result("fast log")
+    end)
+
+    {elapsed_us, result} = :timer.tc(fn -> Agent.ask(pid, "run two tools") end)
+
+    assert {:ok, "done"} = result
+    # Sequential would be ~380ms (300 + 80); concurrent should be ~300ms.
+    assert elapsed_us / 1000 < 350
   end
 end

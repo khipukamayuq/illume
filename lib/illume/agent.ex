@@ -24,6 +24,7 @@ defmodule Illume.Agent do
   @default_max_iterations 10
   @default_tool_timeout 10_000
   @default_model_timeout 60_000
+  @default_max_tool_concurrency 4
 
   defstruct [
     :target_dir,
@@ -36,6 +37,7 @@ defmodule Illume.Agent do
     max_iterations: @default_max_iterations,
     tool_timeout: @default_tool_timeout,
     model_timeout: @default_model_timeout,
+    max_tool_concurrency: @default_max_tool_concurrency,
     tool_backend: :direct
   ]
 
@@ -50,6 +52,7 @@ defmodule Illume.Agent do
           max_iterations: pos_integer(),
           tool_timeout: timeout(),
           model_timeout: timeout(),
+          max_tool_concurrency: pos_integer(),
           tool_backend: Tools.backend()
         }
 
@@ -75,6 +78,8 @@ defmodule Illume.Agent do
       max_iterations: Keyword.get(opts, :max_iterations, @default_max_iterations),
       tool_timeout: Keyword.get(opts, :tool_timeout, @default_tool_timeout),
       model_timeout: Keyword.get(opts, :model_timeout, @default_model_timeout),
+      max_tool_concurrency:
+        Keyword.get(opts, :max_tool_concurrency, @default_max_tool_concurrency),
       tool_backend: Keyword.get(opts, :tool_backend, :direct)
     }
 
@@ -118,7 +123,15 @@ defmodule Illume.Agent do
   end
 
   def handle_continue({:run_tools, tool_uses}, state) do
-    tool_results = Enum.map(tool_uses, &run_tool(&1, state))
+    tool_results =
+      Illume.ToolSupervisor
+      |> Task.Supervisor.async_stream_nolink(tool_uses, &run_tool(&1, state),
+        max_concurrency: state.max_tool_concurrency,
+        ordered: true
+      )
+      |> Enum.zip(tool_uses)
+      |> Enum.map(&tool_stream_result/1)
+
     state = %{state | messages: [%{role: "user", content: tool_results} | state.messages]}
     telemetry([:loop_turn, :stop], %{iteration: state.iteration})
     {:noreply, state, {:continue, :call_model}}
@@ -170,6 +183,14 @@ defmodule Illume.Agent do
   defp finish(state, reply) do
     GenServer.reply(state.from, reply)
     {:noreply, %{state | status: :done, from: nil}}
+  end
+
+  @spec tool_stream_result({{:ok, map()} | {:exit, term()}, map()}) :: map()
+  defp tool_stream_result({{:ok, result}, _tool_use}), do: result
+
+  defp tool_stream_result({{:exit, reason}, %{"id" => id, "name" => name}}) do
+    telemetry([:tool_call, :exception], %{name: name, reason: reason})
+    tool_result(id, "tool #{name} crashed: #{inspect(reason)}", true)
   end
 
   @spec run_tool(map(), t()) :: map()
