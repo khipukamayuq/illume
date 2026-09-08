@@ -17,7 +17,9 @@ defmodule Illume.Agent do
 
   use GenServer
 
+  alias Illume.LLM.Prompts
   alias Illume.Tools
+  alias Illume.Tools.Runner
 
   @default_max_iterations 10
   @default_tool_timeout 10_000
@@ -69,7 +71,7 @@ defmodule Illume.Agent do
     state = %__MODULE__{
       target_dir: target_dir,
       client: Keyword.get(opts, :client, Illume.LLM.AnthropicClient),
-      system: Illume.LLM.Prompts.system(target_dir),
+      system: Prompts.system(target_dir),
       max_iterations: Keyword.get(opts, :max_iterations, @default_max_iterations),
       tool_timeout: Keyword.get(opts, :tool_timeout, @default_tool_timeout),
       model_timeout: Keyword.get(opts, :model_timeout, @default_model_timeout),
@@ -132,7 +134,7 @@ defmodule Illume.Agent do
 
     fun = fn -> state.client.create(params) end
 
-    case Illume.Tools.Runner.run(fun, state.model_timeout) do
+    case Runner.run(fun, state.model_timeout) do
       {:ok, result} -> result
       error -> error
     end
@@ -186,7 +188,7 @@ defmodule Illume.Agent do
   defp run_allowed_tool(id, name, input, state) do
     fun = fn -> Tools.dispatch(name, input, state.target_dir, state.tool_backend) end
 
-    case Illume.Tools.Runner.run(fun, state.tool_timeout) do
+    case Runner.run(fun, state.tool_timeout) do
       {:ok, {:ok, result}} ->
         telemetry([:tool_call, :stop], %{name: name})
         tool_result(id, to_content_string(result), false)

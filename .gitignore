@@ -4,6 +4,10 @@
 # If you run "mix test --cover", coverage assets end up here.
 /cover/
 
+# Dialyzer's persistent lookup table, rebuilt (or restored from CI cache)
+# as needed — not something to commit.
+/priv/plts/
+
 # The directory Mix downloads your dependencies sources to.
 /deps/
 

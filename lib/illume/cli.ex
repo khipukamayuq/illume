@@ -29,6 +29,8 @@ defmodule Illume.CLI do
   is the thin I/O boundary around them.
   """
 
+  alias Illume.Tools.MCP
+
   @doc "Parse escript argv into a target dir, question, and tool backend."
   @spec parse_args([String.t()]) :: {:ok, Path.t(), String.t(), Illume.Tools.backend()} | :error
   def parse_args(["--mcp", target_dir, question]), do: {:ok, target_dir, question, :mcp}
@@ -100,11 +102,11 @@ defmodule Illume.CLI do
 
   @spec start_backend(Illume.Tools.backend(), Path.t()) :: :ok | {:error, term()}
   defp start_backend(:direct, _target_dir), do: :ok
-  defp start_backend(:mcp, target_dir), do: Illume.Tools.MCP.start_clients(target_dir)
+  defp start_backend(:mcp, target_dir), do: MCP.start_clients(target_dir)
 
   @spec stop_backend(Illume.Tools.backend()) :: :ok
   defp stop_backend(:direct), do: :ok
-  defp stop_backend(:mcp), do: Illume.Tools.MCP.stop_clients()
+  defp stop_backend(:mcp), do: MCP.stop_clients()
 
   @spec fail(String.t()) :: no_return()
   defp fail(message) do
