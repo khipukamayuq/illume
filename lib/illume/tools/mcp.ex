@@ -21,7 +21,19 @@ defmodule Illume.Tools.MCP do
   (`Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)`)
   rather than calling `Anubis.Client` directly, so tests can inject a Mox
   double instead of spawning real `npx`/`uvx` server processes.
+
+  `search_files/2`'s matches are re-filtered through
+  `Illume.Tools.PathConfinement.within?/2` before being returned, the same
+  way `Illume.Tools.Filesystem.search_files/2` re-filters its own matches
+  for the `:direct` backend — this tool is never handed input validation
+  by `Illume.Tools.validate_input/3`, so the confinement guarantee has to
+  live here instead. A match resolving outside the target directory would
+  mean the reference server's own confinement failed; that's reported via
+  `[:illume, :mcp, :confinement_violation]` rather than silently dropped
+  with no trace.
   """
+
+  alias Illume.Tools.PathConfinement
 
   @filesystem_client Illume.MCP.FilesystemClient
   @git_client Illume.MCP.GitClient
@@ -82,11 +94,14 @@ defmodule Illume.Tools.MCP do
 
   @spec search_files(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
   def search_files(target_dir, %{"pattern" => pattern}) do
-    call(@filesystem_client, "search_files", %{
-      "path" => target_dir,
-      "pattern" => pattern,
-      "excludePatterns" => []
-    })
+    case call(@filesystem_client, "search_files", %{
+           "path" => target_dir,
+           "pattern" => pattern,
+           "excludePatterns" => []
+         }) do
+      {:ok, text} -> {:ok, confine_matches(text, target_dir)}
+      error -> error
+    end
   end
 
   @spec git_log(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
@@ -113,6 +128,38 @@ defmodule Illume.Tools.MCP do
   @spec client_adapter() :: module()
   defp client_adapter,
     do: Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)
+
+  @no_matches_text "No matches found"
+
+  @spec confine_matches(String.t(), Path.t()) :: String.t()
+  defp confine_matches(@no_matches_text = text, _target_dir), do: text
+
+  defp confine_matches(text, target_dir) do
+    root = Path.expand(target_dir)
+
+    text
+    |> String.split("\n", trim: true)
+    |> Enum.filter(&within_confinement?(&1, root))
+    |> case do
+      [] -> @no_matches_text
+      lines -> Enum.join(lines, "\n")
+    end
+  end
+
+  @spec within_confinement?(String.t(), Path.t()) :: boolean()
+  defp within_confinement?(path, root) do
+    if PathConfinement.within?(path, root) do
+      true
+    else
+      :telemetry.execute(
+        [:illume, :mcp, :confinement_violation],
+        %{system_time: System.system_time()},
+        %{tool: "search_files", path: path, root: root}
+      )
+
+      false
+    end
+  end
 
   @spec extract_text(term()) :: String.t()
   defp extract_text(%{"content" => content}) when is_list(content) do

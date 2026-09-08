@@ -36,10 +36,52 @@ defmodule Illume.Tools.MCPTest do
     expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient,
                                       "search_files",
                                       %{"path" => "/target", "pattern" => "*.ex"} ->
-      text_result("lib/foo.ex")
+      text_result("/target/lib/foo.ex")
     end)
 
-    assert MCP.search_files("/target", %{"pattern" => "*.ex"}) == {:ok, "lib/foo.ex"}
+    assert MCP.search_files("/target", %{"pattern" => "*.ex"}) == {:ok, "/target/lib/foo.ex"}
+  end
+
+  test "search_files passes through the server's own no-matches sentinel unchanged" do
+    expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
+      text_result("No matches found")
+    end)
+
+    assert MCP.search_files("/target", %{"pattern" => "nope"}) == {:ok, "No matches found"}
+  end
+
+  test "search_files filters out a match that resolves outside target_dir" do
+    expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
+      text_result("/target/lib/foo.ex\n/etc/passwd")
+    end)
+
+    assert MCP.search_files("/target", %{"pattern" => "*"}) == {:ok, "/target/lib/foo.ex"}
+  end
+
+  test "search_files emits a confinement_violation telemetry event when a match escapes target_dir" do
+    expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
+      text_result("/etc/passwd")
+    end)
+
+    test_pid = self()
+    handler_id = "mcp-confinement-violation-test"
+
+    :telemetry.attach(
+      handler_id,
+      [:illume, :mcp, :confinement_violation],
+      fn _event, _measurements, metadata, _config ->
+        send(test_pid, {:telemetry_event, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert MCP.search_files("/target", %{"pattern" => "*"}) == {:ok, "No matches found"}
+    assert_receive {:telemetry_event, metadata}
+    assert metadata.tool == "search_files"
+    assert metadata.path == "/etc/passwd"
+    assert metadata.root == "/target"
   end
 
   test "git_log forwards max_count when present, omits it otherwise" do

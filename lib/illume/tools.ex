@@ -13,10 +13,15 @@ defmodule Illume.Tools do
   regardless of which `backend()` ends up handling the call — an MCP-backed
   tool must never be less strict than its direct-call counterpart, even
   when the underlying reference server happens to enforce the same thing
-  itself. The backend is an explicit argument (threaded from `Illume.CLI`
-  through `Illume.Agent`'s state), not process-global mutable
-  configuration — the exact same tool call must behave identically no
-  matter how many agents with different backends happen to be running.
+  itself. `search_files` gets the same guarantee through a different
+  mechanism per backend instead of a `validate_input/3` clause:
+  `Illume.Tools.Filesystem.search_files/2` re-filters its own matches for
+  `:direct`, and `Illume.Tools.MCP.search_files/2` re-filters the reference
+  server's matches for `:mcp`. The backend is an explicit argument
+  (threaded from `Illume.CLI` through `Illume.Agent`'s state), not
+  process-global mutable configuration — the exact same tool call must
+  behave identically no matter how many agents with different backends
+  happen to be running.
 
   `grep_content` has no MCP equivalent (neither reference server exposes
   content search), so it always runs locally regardless of backend.
