@@ -21,6 +21,7 @@ defmodule Illume.Agent do
 
   @default_max_iterations 10
   @default_tool_timeout 10_000
+  @default_model_timeout 60_000
 
   defstruct [
     :target_dir,
@@ -32,6 +33,7 @@ defmodule Illume.Agent do
     iteration: 0,
     max_iterations: @default_max_iterations,
     tool_timeout: @default_tool_timeout,
+    model_timeout: @default_model_timeout,
     tool_backend: :direct
   ]
 
@@ -45,6 +47,7 @@ defmodule Illume.Agent do
           iteration: non_neg_integer(),
           max_iterations: pos_integer(),
           tool_timeout: timeout(),
+          model_timeout: timeout(),
           tool_backend: Tools.backend()
         }
 
@@ -69,6 +72,7 @@ defmodule Illume.Agent do
       system: Illume.LLM.Prompts.system(target_dir),
       max_iterations: Keyword.get(opts, :max_iterations, @default_max_iterations),
       tool_timeout: Keyword.get(opts, :tool_timeout, @default_tool_timeout),
+      model_timeout: Keyword.get(opts, :model_timeout, @default_model_timeout),
       tool_backend: Keyword.get(opts, :tool_backend, :direct)
     }
 
@@ -126,9 +130,12 @@ defmodule Illume.Agent do
       messages: Enum.reverse(state.messages)
     }
 
-    state.client.create(params)
-  rescue
-    e -> {:error, e}
+    fun = fn -> state.client.create(params) end
+
+    case Illume.Tools.Runner.run(fun, state.model_timeout) do
+      {:ok, result} -> result
+      error -> error
+    end
   end
 
   @spec handle_model_response([map()], t()) ::
@@ -216,6 +223,12 @@ defmodule Illume.Agent do
   end
 
   @spec format_error(term()) :: String.t()
+  defp format_error(:timeout), do: "model call timed out"
+
+  defp format_error({:crashed, {exception, _stacktrace}}) when is_exception(exception),
+    do: Exception.message(exception)
+
+  defp format_error({:crashed, reason}), do: "model call crashed: #{inspect(reason)}"
   defp format_error(reason) when is_exception(reason), do: Exception.message(reason)
   defp format_error(reason), do: inspect(reason)
 

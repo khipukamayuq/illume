@@ -39,6 +39,30 @@ defmodule Illume.AgentTest do
     assert Process.alive?(pid)
   end
 
+  test "a model call that outlives model_timeout is a clean error, not a hang", %{
+    tmp_dir: tmp_dir
+  } do
+    stub(ClientMock, :create, fn _params ->
+      Process.sleep(50)
+      text_response("too slow")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, model_timeout: 1)
+
+    assert {:error, message} = Agent.ask(pid, "what is the answer?")
+    assert message =~ "timed out"
+    assert Process.alive?(pid)
+  end
+
+  test "a model call that raises is a clean error, not a crash", %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params -> raise "boom" end)
+
+    pid = start_agent(target_dir: tmp_dir)
+
+    assert {:error, "boom"} = Agent.ask(pid, "what is the answer?")
+    assert Process.alive?(pid)
+  end
+
   test "idle -> awaiting_model -> done happy path (no tool use)", %{tmp_dir: tmp_dir} do
     expect(ClientMock, :create, fn params ->
       assert [%{role: "user", content: "what is the answer?"}] = params.messages
