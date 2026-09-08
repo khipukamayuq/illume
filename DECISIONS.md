@@ -344,11 +344,121 @@ locally, not in the public repo — `DECISIONS.md` (this file) is the
 durable, committed substitute for the parts of that history worth
 keeping public.
 
+## Hardening pass
+
+A follow-up pass (separate from the original spec above) addressing six
+issues from an independent code review plus one capability upgrade, on a
+`hardening-pass` branch with one commit per item — deliberately not
+squashed, unlike entry 36, since this round wanted a reviewable PR history.
+
+### 39. MCP `search_files` given its own confinement layer
+**Date:** 2026-09-07 · **Status:** Accepted
+`Illume.Tools.MCP.search_files/2` forwarded the model's pattern straight
+to the external filesystem server with no confinement check of its own,
+unlike the `:direct` backend's `Filesystem.search_files/2`. Before
+fixing, live-probed the real reference server's `search_files` response
+(not assumed): a successful result is one `"text"` content block of
+newline-joined absolute paths, with the literal sentinel `"No matches
+found"` for zero matches; `structuredContent` is present on *every*
+result, not only `isError` ones (entry 14's original note about it
+appearing "on any tool result carrying `structuredContent`" undersold
+this — it's universal, not error-specific, though this didn't change
+anything since `extract_text/1` only ever reads `"content"`). Matches
+are now re-filtered through `PathConfinement.within?/2`, dropping
+anything outside `target_dir` and emitting a new
+`[:illume, :mcp, :confinement_violation]` telemetry event — a distinct
+event family rather than folded into `[:illume, :tool_call, ...]`,
+since the latter's start/stop/exception vocabulary is a per-call
+lifecycle marker emitted by `Illume.Agent`, while this is a
+security-relevant signal emitted from inside `Illume.Tools.MCP` itself.
+
+### 40. Model call converged into `Runner.run/2`, manual `rescue` removed
+**Date:** 2026-09-07 · **Status:** Accepted
+Two separate review findings — no wall-clock timeout on the model call,
+and `call_model/1`'s `rescue e -> {:error, e}` only catching raises, not
+exits — converged on one fix: routing `state.client.create/1` through
+`Illume.Tools.Runner.run/2` (the same primitive tool calls already use)
+under a new `model_timeout` field (default 60s). This made the manual
+`rescue` redundant (Runner's Task isolation catches raises, exits, and
+hangs uniformly), so it was removed rather than kept alongside the new
+path — the diff is smaller than "two fixes" would imply, deliberately.
+
+### 41. MCP subprocess cleanup: `try/after` added, Ctrl-C left as a known gap
+**Date:** 2026-09-07 · **Status:** Accepted (investigated, not silently assumed)
+Verified empirically before fixing: normal completion (including the
+agent-error path) already left no leaked `npx`/`uvx` processes, but a
+`--mcp` run interrupted mid-flight with SIGINT did leak — confirmed live
+via a temporary `Process.sleep` probe (reverted before committing), not
+simulated. Investigated why: the Erlang VM intercepts SIGINT for its own
+built-in BREAK menu before any Elixir code runs, and `System.trap_signal/2,3`
+explicitly refuses `:sigint` (confirmed against the actual
+`FunctionClauseError` guard — only `sigquit`, `sigterm`, `sigusr1`,
+`sighup`, `sigabrt`, `sigalrm`, `sigusr2`, `sigchld`, `sigstop`, and
+`sigtstp` are trappable). A real fix would mean dropping to the
+undocumented-for-typical-use `:os.set_signal/2` plus a custom
+`erl_signal_server` handler. Given the choice, explicitly decided against
+that: added `try/after` around the two outcomes `Agent.ask/2` can
+actually produce (guaranteed cleanup on success and on agent-error), and
+documented the Ctrl-C gap in `Illume.CLI`'s moduledoc rather than
+reaching for the low-level workaround or leaving the gap unmentioned.
+
+### 42. `git_show`'s flag-injection fix changed mid-implementation after live testing
+**Date:** 2026-09-07 · **Status:** Accepted
+The plan going in was to mirror `Grep.grep_content/2`'s `--`-before-the-
+pattern idiom in `Git.git_show/2`, removing the existing (duplicated)
+`String.starts_with?(revision, "-")` checks entirely. Tested live before
+committing to that, rather than trusting the idiom would transfer: it
+doesn't. `git show --stat -p -- <revision>` silently returns an empty,
+exit-0 result for a *real* commit SHA — git's `--` switches everything
+after it to pathspec-only mode, not "shielded positional argument" mode,
+so this would have been a functional regression, not just a security
+gap. Separately, with no shielding at all, `git show --stat -p
+"--output=/tmp/x"` was confirmed to actually write the diff to an
+arbitrary file — a real arbitrary-file-write via a tool that's supposed
+to be strictly read-only, not a theoretical concern. The original
+leading-dash check was already correct and load-bearing; the actual
+(valid) complaint was only that it existed in two places
+(`Git.git_show/2` and `Tools.validate_input/3`) with two different error
+shapes. Resolution: kept the check, consolidated to one copy in
+`Tools.validate_input/3` only, so it still applies uniformly regardless
+of backend; `Git.git_show/2` no longer duplicates it and documents that
+it depends on already-validated input.
+
+### 43. CI and static analysis added from scratch
+**Date:** 2026-09-07 · **Status:** Accepted
+`credo` and `dialyxir` added as `:dev, :test` deps (both environments
+needed — `mix test` forces `MIX_ENV=test`, `mix credo`/`mix dialyzer`
+default to `MIX_ENV=dev`); GitHub Actions workflow pinned to the exact
+local toolchain (Elixir 1.20.2 / OTP 29) rather than a version matrix.
+First run surfaced 5 small Credo findings (fully-qualified calls to
+already-aliased-elsewhere modules) and zero Dialyzer findings — fixed
+the former inline as planned rather than reshaping code around them,
+since none were nontrivial.
+
+### 44. Concurrent tool execution
+**Date:** 2026-09-07 · **Status:** Accepted
+Multiple `tool_use` blocks in one model turn now run concurrently via
+`Task.Supervisor.async_stream_nolink` (new `max_tool_concurrency` field,
+default 4) instead of `Enum.map`. `Runner.run/2` already guarantees each
+individual call can't hang or crash the caller, so this is purely a
+parallelization of already-safe work, not a new safety layer. The
+stream's output is zipped back against the original `tool_uses` list to
+prove — not assume — that `ordered: true` actually preserves
+`tool_use_id` correlation under concurrent completion order.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
   a `.expert/` index cache observed during testing) — grep's own
   binary-file detection prevents garbage output, but it's noisy. Not
   fixed; not asked for.
-- No CI pipeline, no Dialyzer/Credo integration, despite `@spec`
-  coverage everywhere — plausible future additions, not requested.
+- ~~No CI pipeline, no Dialyzer/Credo integration~~ — resolved by the
+  hardening pass (entry 43).
+- A `--mcp` run interrupted with Ctrl-C/SIGINT does not clean up its
+  spawned `npx`/`uvx` subprocesses (entry 41) — Elixir's public API
+  cannot trap `:sigint`; closing this fully would require dropping to
+  undocumented-for-typical-use low-level OS signal APIs. Documented in
+  `Illume.CLI`'s moduledoc; not fixed.
+- No MCP server mode, multi-turn conversation support, or provider
+  abstraction — explicitly out of scope for both the original spec and
+  the hardening pass, not oversights.
