@@ -58,8 +58,9 @@ defmodule Illume.Tools.MCP do
     end
   end
 
+  @doc "Stop every MCP client process currently running under `Illume.MCPSupervisor`."
   @spec stop_clients() :: :ok
-  defp stop_clients do
+  def stop_clients do
     for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(Illume.MCPSupervisor) do
       DynamicSupervisor.terminate_child(Illume.MCPSupervisor, pid)
     end

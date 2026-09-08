@@ -10,6 +10,20 @@ defmodule Illume.CLI do
   either way. `--mcp` requires `npx` and `uvx` on PATH and network access on
   first run.
 
+  `answer/3` guarantees `Illume.Tools.MCP.stop_clients/0` runs after the
+  agent finishes, whether it succeeds or errors, via `try/after` — but
+  only for those two outcomes. It cannot guarantee cleanup on an external
+  interrupt: pressing Ctrl-C sends SIGINT, which the Erlang VM intercepts
+  for its own built-in BREAK menu before any Elixir code runs, and
+  `System.trap_signal/2,3` explicitly refuses to trap `:sigint` (verified
+  against the actual runtime — only `:sigquit`, `:sigterm`, `:sigusr1`,
+  `:sighup`, `:sigabrt`, `:sigalrm`, `:sigusr2`, `:sigchld`, `:sigstop`,
+  and `:sigtstp` are trappable). Closing that gap would mean dropping to
+  the undocumented-for-typical-use `:os.set_signal/2` plus a custom
+  `erl_signal_server` handler — out of scope here. A `--mcp` run
+  interrupted with Ctrl-C leaves its spawned `npx`/`uvx` subprocesses
+  running until the VM itself exits or is force-killed.
+
   Argument parsing and validation (`parse_args/1`, `validate/1`) are pure
   — no I/O, no `System.halt/1` — so they're testable directly; `main/1`
   is the thin I/O boundary around them.
@@ -54,15 +68,14 @@ defmodule Illume.CLI do
   defp answer(target_dir, question, backend) do
     case start_backend(backend, target_dir) do
       :ok ->
-        child_spec =
-          Supervisor.child_spec(
-            {Illume.Agent, target_dir: target_dir, tool_backend: backend},
-            restart: :temporary
-          )
+        result =
+          try do
+            run_agent(target_dir, question, backend)
+          after
+            stop_backend(backend)
+          end
 
-        {:ok, pid} = DynamicSupervisor.start_child(Illume.AgentSupervisor, child_spec)
-
-        case Illume.Agent.ask(pid, question) do
+        case result do
           {:ok, text} -> IO.puts(text)
           {:error, reason} -> fail("agent error: #{inspect(reason)}")
         end
@@ -72,9 +85,26 @@ defmodule Illume.CLI do
     end
   end
 
+  @spec run_agent(Path.t(), String.t(), Illume.Tools.backend()) ::
+          {:ok, String.t()} | {:error, term()}
+  defp run_agent(target_dir, question, backend) do
+    child_spec =
+      Supervisor.child_spec(
+        {Illume.Agent, target_dir: target_dir, tool_backend: backend},
+        restart: :temporary
+      )
+
+    {:ok, pid} = DynamicSupervisor.start_child(Illume.AgentSupervisor, child_spec)
+    Illume.Agent.ask(pid, question)
+  end
+
   @spec start_backend(Illume.Tools.backend(), Path.t()) :: :ok | {:error, term()}
   defp start_backend(:direct, _target_dir), do: :ok
   defp start_backend(:mcp, target_dir), do: Illume.Tools.MCP.start_clients(target_dir)
+
+  @spec stop_backend(Illume.Tools.backend()) :: :ok
+  defp stop_backend(:direct), do: :ok
+  defp stop_backend(:mcp), do: Illume.Tools.MCP.stop_clients()
 
   @spec fail(String.t()) :: no_return()
   defp fail(message) do
