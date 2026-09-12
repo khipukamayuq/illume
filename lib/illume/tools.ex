@@ -17,13 +17,14 @@ defmodule Illume.Tools do
   mechanism per backend instead of a `validate_input/3` clause:
   `Illume.Tools.Filesystem.search_files/2` re-filters its own matches for
   `:direct`, and `Illume.Tools.MCP.search_files/2` re-filters the reference
-  server's matches for `:mcp`. `git_show`'s leading-dash revision check
-  lives here and only here — `git`'s own `--` disambiguates paths from
-  revisions rather than shielding a revision from being parsed as a flag
-  the way it shields `Illume.Tools.Grep.grep_content/2`'s pattern, so
-  `Illume.Tools.Git.git_show/2` deliberately does not repeat this check
-  itself; it relies on never being reached with unvalidated input via
-  `dispatch/4`. The backend is an explicit argument (threaded from
+  server's matches for `:mcp`. `git_show`'s revision gets two layers: the
+  leading-dash rejection here is a cheap fail-fast, and
+  `Illume.Tools.Git.git_show/2` is independently safe on its own via
+  `--end-of-options` (which, unlike a bare `--`, shields a revision from
+  being parsed as a flag without switching `git show` into pathspec-only
+  mode) — so a future caller reaching `git_show/2` directly, bypassing
+  this module, does not reopen the argument-injection this pair of checks
+  closes. The backend is an explicit argument (threaded from
   `Illume.CLI` through `Illume.Agent`'s state), not process-global mutable
   configuration — the exact same tool call must behave identically no
   matter how many agents with different backends happen to be running.
@@ -69,12 +70,17 @@ defmodule Illume.Tools do
     end
   end
 
-  defp validate_input("git_show", %{"revision" => revision}, _target_dir) do
+  defp validate_input("git_show", %{"revision" => revision}, _target_dir)
+       when is_binary(revision) do
     if String.starts_with?(revision, "-") do
       {:error, "invalid revision: #{revision}"}
     else
       :ok
     end
+  end
+
+  defp validate_input("git_show", %{"revision" => revision}, _target_dir) do
+    {:error, "invalid revision: #{inspect(revision)}"}
   end
 
   defp validate_input(_name, _input, _target_dir), do: :ok

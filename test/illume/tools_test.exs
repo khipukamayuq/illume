@@ -57,6 +57,13 @@ defmodule Illume.ToolsTest do
                  :mcp
                )
     end
+
+    test "git_show's revision is rejected up front if it isn't a string" do
+      assert {:error, message} =
+               Tools.dispatch("git_show", %{"revision" => 123}, File.cwd!())
+
+      assert message =~ "invalid revision"
+    end
   end
 
   describe "specs/0" do
