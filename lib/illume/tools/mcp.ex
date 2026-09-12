@@ -30,7 +30,12 @@ defmodule Illume.Tools.MCP do
   live here instead. A match resolving outside the target directory would
   mean the reference server's own confinement failed; that's reported via
   `[:illume, :mcp, :confinement_violation]` rather than silently dropped
-  with no trace.
+  with no trace. Matches are also required to already be absolute
+  (`within_confinement?/2` rejects anything else as a violation) — the
+  reference server has only ever been observed to return absolute paths,
+  but `PathConfinement.within?/2` itself would otherwise resolve a
+  relative one against this VM's own working directory, not `target_dir`,
+  which is the wrong base entirely for an external server's response.
   """
 
   alias Illume.Tools.PathConfinement
@@ -149,7 +154,7 @@ defmodule Illume.Tools.MCP do
 
   @spec within_confinement?(String.t(), Path.t()) :: boolean()
   defp within_confinement?(path, root) do
-    if PathConfinement.within?(path, root) do
+    if Path.type(path) == :absolute and PathConfinement.within?(path, root) do
       true
     else
       :telemetry.execute(

@@ -58,6 +58,22 @@ defmodule Illume.Tools.MCPTest do
     assert MCP.search_files("/target", %{"pattern" => "*"}) == {:ok, "/target/lib/foo.ex"}
   end
 
+  test "search_files rejects a relative match instead of resolving it against this VM's cwd" do
+    # Deliberately use this VM's own cwd as target_dir: if confinement ever
+    # resolved a relative match via Path.expand/1's cwd-relative default
+    # (instead of requiring the server's own matches to already be
+    # absolute), a relative match would incorrectly resolve to somewhere
+    # under this same root and pass — even though the server never claimed
+    # that path at all.
+    root = File.cwd!()
+
+    expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
+      text_result("#{root}/lib/foo.ex\nrelative/sneaky.ex")
+    end)
+
+    assert MCP.search_files(root, %{"pattern" => "*"}) == {:ok, "#{root}/lib/foo.ex"}
+  end
+
   test "search_files emits a confinement_violation telemetry event when a match escapes target_dir" do
     expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
       text_result("/etc/passwd")
