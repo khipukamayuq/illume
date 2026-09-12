@@ -127,7 +127,14 @@ defmodule Illume.Agent do
       Illume.ToolSupervisor
       |> Task.Supervisor.async_stream_nolink(tool_uses, &run_tool(&1, state),
         max_concurrency: state.max_tool_concurrency,
-        ordered: true
+        ordered: true,
+        # Runner.run/2 already bounds every individual call to tool_timeout —
+        # the stream itself must not impose a second, shorter timeout on top
+        # of that (its own default is 5s, well under tool_timeout's 10s
+        # default, and its default on_timeout: :exit would kill this very
+        # process instead of yielding a graceful {:exit, reason} entry).
+        timeout: :infinity,
+        on_timeout: :kill_task
       )
       |> Enum.zip(tool_uses)
       |> Enum.map(&tool_stream_result/1)

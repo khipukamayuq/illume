@@ -270,4 +270,36 @@ defmodule Illume.AgentTest do
     # Sequential would be ~380ms (300 + 80); concurrent should be ~300ms.
     assert elapsed_us / 1000 < 350
   end
+
+  test "a tool slower than 5s is bounded by tool_timeout, not async_stream's own default timeout",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response("read_file", %{"path" => "a.txt"})
+    end)
+
+    expect(ClientMock, :create, fn params ->
+      assert [_question, _assistant, %{role: "user", content: [result]}] = params.messages
+      refute result.is_error
+      assert result.content =~ "slow but fine"
+      text_response("done")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp, tool_timeout: 10_000)
+    allow(Illume.Tools.MCP.ClientMock, self(), pid)
+
+    # Task.Supervisor.async_stream_nolink defaults to a 5s timeout with
+    # on_timeout: :exit, which would kill this very Agent process before
+    # Runner.run/2's own tool_timeout (10s here) ever gets a say. Sleeping
+    # past 5s but under tool_timeout proves the stream itself imposes no
+    # timeout of its own.
+    stub(Illume.Tools.MCP.ClientMock, :call_tool, fn Illume.MCP.FilesystemClient,
+                                                     "read_text_file",
+                                                     _args ->
+      Process.sleep(5_500)
+      mcp_text_result("slow but fine")
+    end)
+
+    assert {:ok, "done"} = Agent.ask(pid, "read a slow file")
+    assert Process.alive?(pid)
+  end
 end
