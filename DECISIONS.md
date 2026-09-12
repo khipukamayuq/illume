@@ -446,6 +446,64 @@ stream's output is zipped back against the original `tool_uses` list to
 prove — not assume — that `ordered: true` actually preserves
 `tool_use_id` correlation under concurrent completion order.
 
+### 45. Independent review of the hardening pass caught a real regression before merge
+**Date:** 2026-09-11 · **Status:** Fixed
+Ran a 4-agent parallel review (elixir-reviewer, security-analyzer,
+testing-reviewer, requirements-verifier) against the hardening-pass diff
+before opening it for merge — the pass itself had not been reviewed at
+implementation time. Two agents independently flagged the same Critical
+finding: entry 44's `Task.Supervisor.async_stream_nolink` call had no
+`:timeout`/`:on_timeout`, silently inheriting Elixir's defaults —
+5000ms with `on_timeout: :exit`. Confirmed directly against the
+installed Elixir version's own docs, then reproduced empirically
+(reverted the fix, got the exact predicted failure —
+`Task.Supervised.stream(5000) ** (EXIT) time out` — then restored it):
+a tool running past 5s didn't yield a graceful `{:exit, reason}` stream
+entry, it killed the `Illume.Agent` GenServer outright, crashing the
+caller's `GenServer.call(pid, {:ask, _}, :infinity)`. This directly
+contradicted entry 44's own stated rationale that concurrency "doesn't
+add a new layer of timeout/crash semantics." Fixed with
+`timeout: :infinity, on_timeout: :kill_task` — the actual bound was
+always meant to come from `Runner.run/2`'s `tool_timeout` alone.
+
+### 46. `git_show` upgraded from single-check to structurally safe, based on a review finding
+**Date:** 2026-09-11 · **Status:** Fixed
+Review also pointed out that entry 42's consolidation left
+`Illume.Tools.Git.git_show/2` with zero validation of its own, and
+identified a primitive the original investigation had missed:
+`--end-of-options` (git ≥2.24) shields a revision from being parsed as
+a flag without `--`'s side effect of switching to pathspec-only mode.
+Re-verified live in both directions before adopting it — a real SHA
+still resolves, a flag-like payload is still safely rejected. The
+original investigation (entry 42) had tested `--end-of-options` only
+combined with a redundant trailing `--`, which reintroduces the
+pathspec trap, and wrongly concluded from that combination that the
+flag "isn't honored" — a genuine methodology error, caught by review
+rather than by the original testing. `git_show/2` now uses
+`--end-of-options` and is safe on its own; `Tools.validate_input/3`'s
+leading-dash check stays as a cheap fail-fast, making the two mechanisms
+genuinely complementary rather than duplicated. Also added a
+`when is_binary(revision)` guard so a non-string revision is rejected
+cleanly instead of raising inside `String.starts_with?/2`.
+
+### 47. MCP `search_files` confinement now requires matches to already be absolute
+**Date:** 2026-09-11 · **Status:** Fixed
+Review noted that entry 39's confinement filter fed external, unverified
+strings into `PathConfinement.within?/2`, which was designed for
+locally-generated absolute paths and resolves a relative input against
+this VM's own working directory via `Path.expand/1`'s single-argument
+form — not against `target_dir`. Masked in practice because the live-
+tested reference server has only ever returned absolute paths, but
+reproduced the real gap directly: with `target_dir` set to this VM's own
+cwd (a normal invocation shape, e.g. `illume . "..."`), a relative match
+mixed into an otherwise-valid response incorrectly passed confinement
+and got included in the result — a path the server never actually
+claimed. Fixed by requiring `Path.type(path) == :absolute` before
+checking confinement at all, and documented the precondition on both
+`Illume.Tools.MCP`'s and `PathConfinement`'s own moduledocs, since
+`within?/2` never having advertised this requirement is how the gap
+arose in the first place.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
