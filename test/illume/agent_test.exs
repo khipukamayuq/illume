@@ -292,25 +292,25 @@ defmodule Illume.AgentTest do
     pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp)
     allow(Illume.Tools.MCP.ClientMock, self(), pid)
 
-    # The first-requested tool (toolu_1) sleeps far longer than the
-    # second (toolu_2) — if ordering were determined by completion time
-    # rather than genuinely preserved by `ordered: true`, toolu_2 would
-    # land first in the result and this test would catch it.
+    # The first-requested tool (toolu_1) sleeps longer than the second
+    # (toolu_2) — if ordering were determined by completion time rather
+    # than genuinely preserved by `ordered: true`, toolu_2 would land
+    # first in the result and this test would catch it.
     stub(Illume.Tools.MCP.ClientMock, :call_tool, fn
       Illume.MCP.FilesystemClient, "read_text_file", _args ->
         Process.sleep(300)
         mcp_text_result("slow file contents")
 
       Illume.MCP.GitClient, "git_log", _args ->
-        Process.sleep(80)
+        Process.sleep(200)
         mcp_text_result("fast log")
     end)
 
     {elapsed_us, result} = :timer.tc(fn -> Agent.ask(pid, "run two tools") end)
 
     assert {:ok, "done"} = result
-    # Sequential would be ~380ms (300 + 80); concurrent should be ~300ms.
-    assert elapsed_us / 1000 < 350
+    # Sequential would be ~500ms (300 + 200); concurrent should be ~300ms.
+    assert elapsed_us / 1000 < 400
   end
 
   test "a tool slower than 5s is bounded by tool_timeout, not async_stream's own default timeout",
