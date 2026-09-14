@@ -3,6 +3,7 @@ defmodule Illume.Application do
 
   use Application
 
+  @spec start(Application.start_type(), term()) :: {:ok, pid()} | {:error, term()}
   @impl true
   def start(_type, _args) do
     children = [

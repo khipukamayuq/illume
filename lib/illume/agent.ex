@@ -67,6 +67,7 @@ defmodule Illume.Agent do
     GenServer.call(pid, {:ask, question}, :infinity)
   end
 
+  @spec init(keyword()) :: {:ok, t()}
   @impl true
   def init(opts) do
     target_dir = Keyword.fetch!(opts, :target_dir)
@@ -86,6 +87,8 @@ defmodule Illume.Agent do
     {:ok, state}
   end
 
+  @spec handle_call({:ask, String.t()}, GenServer.from(), t()) ::
+          {:reply, {:error, :busy}, t()} | {:noreply, t(), {:continue, :call_model}}
   @impl true
   def handle_call({:ask, question}, from, %__MODULE__{status: :idle} = state) do
     state = %{
@@ -102,6 +105,14 @@ defmodule Illume.Agent do
     {:reply, {:error, :busy}, state}
   end
 
+  @doc """
+  Calls the model, then — if it requested tools — runs them concurrently
+  (bounded by `max_tool_concurrency`), each individually isolated and
+  bounded by `tool_timeout` via `Illume.Tools.Runner.run/2`, before
+  looping back to call the model again with the results.
+  """
+  @spec handle_continue(:call_model | {:run_tools, [map()]}, t()) ::
+          {:noreply, t()} | {:noreply, t(), {:continue, :call_model | {:run_tools, [map()]}}}
   @impl true
   def handle_continue(:call_model, state) do
     telemetry([:loop_turn, :start], %{iteration: state.iteration})
@@ -128,11 +139,6 @@ defmodule Illume.Agent do
       |> Task.Supervisor.async_stream_nolink(tool_uses, &run_tool(&1, state),
         max_concurrency: state.max_tool_concurrency,
         ordered: true,
-        # Runner.run/2 already bounds every individual call to tool_timeout —
-        # the stream itself must not impose a second, shorter timeout on top
-        # of that (its own default is 5s, well under tool_timeout's 10s
-        # default, and its default on_timeout: :exit would kill this very
-        # process instead of yielding a graceful {:exit, reason} entry).
         timeout: :infinity,
         on_timeout: :kill_task
       )

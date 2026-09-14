@@ -7,46 +7,24 @@ defmodule Illume.Tools.MCP do
 
   Client processes are started per-CLI-invocation (the target directory is
   only known at runtime) under `Illume.MCPSupervisor`, not declared
-  statically in `Illume.Application`.
-
-  The filesystem and git clients are given distinct `client_info["name"]`
-  values (`start_clients/1`) rather than sharing one: `Anubis.Client.Cache`
-  keys its (per-process, `:private`) ETS tool-validator table by that name
-  alone, not by client process, so two clients sharing a name collide on
-  the same table and crash with an ETS "insufficient access rights" error
-  on any tool result that carries `structuredContent` — which includes
-  every `isError` result.
+  statically in `Illume.Application`. The filesystem and git clients must
+  keep distinct `client_info["name"]` values, or they collide on a shared
+  `Anubis.Client.Cache` ETS table (see DECISIONS.md entry 14).
 
   All calls to `Anubis.Client` go through `client_adapter/0`
   (`Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)`)
   rather than calling `Anubis.Client` directly, so tests can inject a Mox
   double instead of spawning real `npx`/`uvx` server processes.
 
-  `search_files/2`'s matches are re-filtered through
-  `Illume.Tools.PathConfinement.within?/2` before being returned, the same
-  way `Illume.Tools.Filesystem.search_files/2` re-filters its own matches
-  for the `:direct` backend — this tool is never handed input validation
-  by `Illume.Tools.validate_input/3`, so the confinement guarantee has to
-  live here instead. A match resolving outside the target directory would
-  mean the reference server's own confinement failed; that's reported via
-  `[:illume, :mcp, :confinement_violation]` rather than silently dropped
-  with no trace. Matches are also required to already be absolute
-  (`within_confinement?/2` rejects anything else as a violation) — the
-  reference server has only ever been observed to return absolute paths,
-  but `PathConfinement.within?/2` itself would otherwise resolve a
-  relative one against this VM's own working directory, not `target_dir`,
-  which is the wrong base entirely for an external server's response.
-
-  `confine_matches/2` distinguishes the server's own "no matches" from
-  confinement dropping every match it returned, so the model isn't told
-  "there is no such file" when out-of-bounds matches were actually found
-  and suppressed. The server's matches arrive as a single newline-joined
-  string rather than a real list, so a filename containing a literal
-  newline is inherently ambiguous at this transport boundary — the
-  `structuredContent` field carries the identical joined string, not an
-  array, so it offers no way around this. Accepted as-is: not an escape
-  risk (such a match still can't resolve outside `target_dir`), and
-  exceptionally unlikely for the Elixir codebases this tool targets.
+  `search_files/2` is never handed input validation by
+  `Illume.Tools.validate_input/3`, so it re-filters its own matches
+  through `Illume.Tools.PathConfinement.within?/2`: anything that resolves
+  outside `target_dir`, or isn't already absolute, is dropped and reported
+  via `[:illume, :mcp, :confinement_violation]` telemetry rather than
+  silently ignored (see DECISIONS.md entries 39 and 47). It also
+  distinguishes the server's own "no matches" from confinement dropping
+  every match it returned, so the model isn't told "there is no such
+  file" when matches existed but were suppressed.
   """
 
   alias Illume.Tools.PathConfinement

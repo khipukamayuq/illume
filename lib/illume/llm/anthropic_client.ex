@@ -11,6 +11,7 @@ defmodule Illume.LLM.AnthropicClient do
   @model "claude-sonnet-5"
   @max_tokens 4096
 
+  @spec create(map()) :: {:ok, map()} | {:error, term()}
   @impl true
   def create(params) do
     ReqAnthropic.Messages.create(

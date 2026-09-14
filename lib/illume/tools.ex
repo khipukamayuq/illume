@@ -15,19 +15,18 @@ defmodule Illume.Tools do
   when the underlying reference server happens to enforce the same thing
   itself. `search_files` gets the same guarantee through a different
   mechanism per backend instead of a `validate_input/3` clause:
-  `Illume.Tools.Filesystem.search_files/2` re-filters its own matches for
-  `:direct`, and `Illume.Tools.MCP.search_files/2` re-filters the reference
-  server's matches for `:mcp`. `git_show`'s revision gets two layers: the
-  leading-dash rejection here is a cheap fail-fast, and
-  `Illume.Tools.Git.git_show/2` is independently safe on its own via
-  `--end-of-options` (which, unlike a bare `--`, shields a revision from
-  being parsed as a flag without switching `git show` into pathspec-only
-  mode) — so a future caller reaching `git_show/2` directly, bypassing
-  this module, does not reopen the argument-injection this pair of checks
-  closes. The backend is an explicit argument (threaded from
-  `Illume.CLI` through `Illume.Agent`'s state), not process-global mutable
-  configuration — the exact same tool call must behave identically no
-  matter how many agents with different backends happen to be running.
+  `Illume.Tools.Filesystem.search_files/2` and `Illume.Tools.MCP.search_files/2`
+  each re-filter their own matches. `git_show`'s revision is checked
+  twice: the leading-dash rejection here is a cheap fail-fast, and
+  `Illume.Tools.Git.git_show/2` is independently safe on its own too —
+  both layers are load-bearing; removing either one reopens the
+  argument-injection they close together (see DECISIONS.md entries 42
+  and 46).
+
+  The backend is an explicit argument (threaded from `Illume.CLI` through
+  `Illume.Agent`'s state), not process-global mutable configuration — the
+  exact same tool call must behave identically no matter how many agents
+  with different backends happen to be running.
 
   `grep_content` has no MCP equivalent (neither reference server exposes
   content search), so it always runs locally regardless of backend.

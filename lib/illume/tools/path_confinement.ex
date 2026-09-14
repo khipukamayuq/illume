@@ -64,6 +64,7 @@ defmodule Illume.Tools.PathConfinement do
     |> resolve_segments("/", 0)
   end
 
+  @spec resolve_segments([String.t()], String.t(), non_neg_integer()) :: Path.t() | nil
   defp resolve_segments(_segments, _resolved, hops) when hops > @max_symlink_hops, do: nil
   defp resolve_segments([], resolved, _hops), do: resolved
 

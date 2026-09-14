@@ -11,18 +11,11 @@ defmodule Illume.CLI do
   first run.
 
   `answer/3` guarantees `Illume.Tools.MCP.stop_clients/0` runs after the
-  agent finishes, whether it succeeds or errors, via `try/after` — but
-  only for those two outcomes. It cannot guarantee cleanup on an external
-  interrupt: pressing Ctrl-C sends SIGINT, which the Erlang VM intercepts
-  for its own built-in BREAK menu before any Elixir code runs, and
-  `System.trap_signal/2,3` explicitly refuses to trap `:sigint` (verified
-  against the actual runtime — only `:sigquit`, `:sigterm`, `:sigusr1`,
-  `:sighup`, `:sigabrt`, `:sigalrm`, `:sigusr2`, `:sigchld`, `:sigstop`,
-  and `:sigtstp` are trappable). Closing that gap would mean dropping to
-  the undocumented-for-typical-use `:os.set_signal/2` plus a custom
-  `erl_signal_server` handler — out of scope here. A `--mcp` run
-  interrupted with Ctrl-C leaves its spawned `npx`/`uvx` subprocesses
-  running until the VM itself exits or is force-killed.
+  agent finishes, on both success and error, via `try/after`. It does
+  not guarantee cleanup on Ctrl-C: Elixir cannot trap `:sigint` (see
+  DECISIONS.md entry 41), so an interrupted `--mcp` run leaves its
+  spawned `npx`/`uvx` subprocesses running until the VM exits or is
+  force-killed.
 
   Argument parsing and validation (`parse_args/1`, `validate/1`) are pure
   — no I/O, no `System.halt/1` — so they're testable directly; `main/1`
