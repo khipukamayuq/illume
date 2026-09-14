@@ -197,7 +197,7 @@ defmodule Illume.Agent do
 
   defp tool_stream_result({{:exit, reason}, %{"id" => id, "name" => name}}) do
     telemetry([:tool_call, :exception], %{name: name, reason: reason})
-    tool_result(id, "tool #{name} crashed: #{inspect(reason)}", true)
+    tool_result(id, "tool #{name} crashed: #{inspect(strip_stacktrace(reason))}", true)
   end
 
   @spec run_tool(map(), t()) :: map()
@@ -231,7 +231,7 @@ defmodule Illume.Agent do
 
       {:error, {:crashed, reason}} ->
         telemetry([:tool_call, :exception], %{name: name, reason: reason})
-        tool_result(id, "tool #{name} crashed: #{inspect(reason)}", true)
+        tool_result(id, "tool #{name} crashed: #{inspect(strip_stacktrace(reason))}", true)
     end
   end
 
@@ -258,9 +258,15 @@ defmodule Illume.Agent do
   defp format_error({:crashed, {exception, _stacktrace}}) when is_exception(exception),
     do: Exception.message(exception)
 
-  defp format_error({:crashed, reason}), do: "model call crashed: #{inspect(reason)}"
+  defp format_error({:crashed, reason}),
+    do: "model call crashed: #{inspect(strip_stacktrace(reason))}"
+
   defp format_error(reason) when is_exception(reason), do: Exception.message(reason)
   defp format_error(reason), do: inspect(reason)
+
+  @spec strip_stacktrace(term()) :: term()
+  defp strip_stacktrace({reason, stacktrace}) when is_list(stacktrace), do: reason
+  defp strip_stacktrace(reason), do: reason
 
   @spec telemetry([atom()], map()) :: :ok
   defp telemetry(event_suffix, metadata) do

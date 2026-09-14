@@ -76,6 +76,19 @@ defmodule Illume.AgentTest do
     assert Process.alive?(pid)
   end
 
+  test "a model call that crashes without raising an exception reports the reason without a stacktrace",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params -> throw(:mocked_boom) end)
+
+    pid = start_agent(target_dir: tmp_dir)
+
+    assert {:error, message} = Agent.ask(pid, "what is the answer?")
+    assert message =~ "mocked_boom"
+    refute message =~ "Task.Supervised"
+    refute message =~ "elixir.erl"
+    assert Process.alive?(pid)
+  end
+
   test "idle -> awaiting_model -> done happy path (no tool use)", %{tmp_dir: tmp_dir} do
     expect(ClientMock, :create, fn params ->
       assert [%{role: "user", content: "what is the answer?"}] = params.messages
@@ -143,6 +156,35 @@ defmodule Illume.AgentTest do
     end)
 
     pid = start_agent(target_dir: tmp_dir)
+
+    assert {:ok, "Recovered from the crash."} = Agent.ask(pid, "read a bad path")
+    assert Process.alive?(pid)
+  end
+
+  test "a tool crashing without raising an exception reports the reason without a stacktrace",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response("read_file", %{"path" => "a.txt"})
+    end)
+
+    expect(ClientMock, :create, fn params ->
+      assert [_, _, %{role: "user", content: [result]}] = params.messages
+      assert result.is_error == true
+      assert result.content =~ "mocked_boom"
+      refute result.content =~ "Task.Supervised"
+      refute result.content =~ "elixir.erl"
+
+      text_response("Recovered from the crash.")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp)
+    allow(Illume.Tools.MCP.ClientMock, self(), pid)
+
+    stub(Illume.Tools.MCP.ClientMock, :call_tool, fn Illume.MCP.FilesystemClient,
+                                                     "read_text_file",
+                                                     _args ->
+      throw(:mocked_boom)
+    end)
 
     assert {:ok, "Recovered from the crash."} = Agent.ask(pid, "read a bad path")
     assert Process.alive?(pid)
