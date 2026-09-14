@@ -21,10 +21,18 @@ answer, rather than just dumping raw search output.
   re-checked at dispatch regardless of caller. Nothing outside the
   allow-list is ever reachable, even if an underlying server offers
   write/delete tools.
-- **`Illume.Tools.Runner`** — every tool call runs under a
-  `Task.Supervisor` with a configurable timeout. A crash or timeout
-  becomes an error result fed back to the model instead of taking down
-  the agent.
+- **`Illume.Tools.Runner`** — every tool call, and the model call itself,
+  runs under a `Task.Supervisor` with a configurable timeout
+  (`tool_timeout` / `model_timeout`, default 60s for the latter). A tool
+  crash or timeout becomes an error result fed back to the model; a model
+  call crash or timeout is terminal for that `ask/2` call instead — there's
+  no tool result to recover into.
+- **Concurrent tool execution** — when a single model turn requests
+  multiple tools, they run concurrently (bounded by `max_tool_concurrency`,
+  default 4) via `Task.Supervisor.async_stream_nolink`, rather than one
+  after another. Each call is still individually isolated by
+  `Illume.Tools.Runner`; concurrency doesn't add a second timeout/crash
+  layer, it just parallelizes already-safe work.
 - **Two tool backends, one interface** — tools run as direct in-process
   calls by default, or (`--mcp` flag) proxied through the official
   filesystem and git reference MCP servers via `anubis_mcp`.
@@ -77,6 +85,10 @@ The suite runs offline — no real network calls to Anthropic or an MCP
 server. The LLM client is Mox-mocked, MCP calls are mocked at the
 `Anubis.Client` boundary, and `Illume.LLM.AnthropicClient` is tested via
 `Req.Test` intercepting the real request pipeline.
+
+CI (GitHub Actions) runs `mix format --check-formatted`, `mix test`,
+`mix credo --strict`, and `mix dialyzer` on every push and PR, pinned to
+the same Elixir/OTP toolchain used locally.
 
 ## License
 

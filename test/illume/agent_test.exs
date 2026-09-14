@@ -21,6 +21,19 @@ defmodule Illume.AgentTest do
      }}
   end
 
+  defp tool_use_response_multi(specs) do
+    content =
+      Enum.map(specs, fn {name, input, id} ->
+        %{"type" => "tool_use", "id" => id, "name" => name, "input" => input}
+      end)
+
+    {:ok, %{"content" => content, "stop_reason" => "tool_use"}}
+  end
+
+  defp mcp_text_result(text) do
+    {:ok, %{result: %{"content" => [%{"type" => "text", "text" => text}]}, is_error: false}}
+  end
+
   defp start_agent(opts) do
     pid = start_supervised!({Agent, Keyword.put_new(opts, :client, ClientMock)})
     allow(ClientMock, self(), pid)
@@ -36,6 +49,43 @@ defmodule Illume.AgentTest do
 
     assert {:error, message} = Agent.ask(pid, "what is the answer?")
     assert message =~ "unexpected API response"
+    assert Process.alive?(pid)
+  end
+
+  test "a model call that outlives model_timeout is a clean error, not a hang", %{
+    tmp_dir: tmp_dir
+  } do
+    stub(ClientMock, :create, fn _params ->
+      Process.sleep(50)
+      text_response("too slow")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, model_timeout: 1)
+
+    assert {:error, message} = Agent.ask(pid, "what is the answer?")
+    assert message =~ "timed out"
+    assert Process.alive?(pid)
+  end
+
+  test "a model call that raises is a clean error, not a crash", %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params -> raise "boom" end)
+
+    pid = start_agent(target_dir: tmp_dir)
+
+    assert {:error, "boom"} = Agent.ask(pid, "what is the answer?")
+    assert Process.alive?(pid)
+  end
+
+  test "a model call that crashes without raising an exception reports the reason without a stacktrace",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params -> throw(:mocked_boom) end)
+
+    pid = start_agent(target_dir: tmp_dir)
+
+    assert {:error, message} = Agent.ask(pid, "what is the answer?")
+    assert message =~ "mocked_boom"
+    refute message =~ "Task.Supervised"
+    refute message =~ "elixir.erl"
     assert Process.alive?(pid)
   end
 
@@ -106,6 +156,35 @@ defmodule Illume.AgentTest do
     end)
 
     pid = start_agent(target_dir: tmp_dir)
+
+    assert {:ok, "Recovered from the crash."} = Agent.ask(pid, "read a bad path")
+    assert Process.alive?(pid)
+  end
+
+  test "a tool crashing without raising an exception reports the reason without a stacktrace",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response("read_file", %{"path" => "a.txt"})
+    end)
+
+    expect(ClientMock, :create, fn params ->
+      assert [_, _, %{role: "user", content: [result]}] = params.messages
+      assert result.is_error == true
+      assert result.content =~ "mocked_boom"
+      refute result.content =~ "Task.Supervised"
+      refute result.content =~ "elixir.erl"
+
+      text_response("Recovered from the crash.")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp)
+    allow(Illume.Tools.MCP.ClientMock, self(), pid)
+
+    stub(Illume.Tools.MCP.ClientMock, :call_tool, fn Illume.MCP.FilesystemClient,
+                                                     "read_text_file",
+                                                     _args ->
+      throw(:mocked_boom)
+    end)
 
     assert {:ok, "Recovered from the crash."} = Agent.ask(pid, "read a bad path")
     assert Process.alive?(pid)
@@ -192,5 +271,77 @@ defmodule Illume.AgentTest do
 
     assert {:error, :busy} = Agent.ask(pid, "second question")
     assert {:ok, "done"} = Task.await(task)
+  end
+
+  test "runs multiple tool_use calls in one turn concurrently, preserving request order",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response_multi([
+        {"read_file", %{"path" => "a.txt"}, "toolu_1"},
+        {"git_log", %{}, "toolu_2"}
+      ])
+    end)
+
+    expect(ClientMock, :create, fn params ->
+      assert [_question, _assistant, %{role: "user", content: [first, second]}] = params.messages
+      assert first.tool_use_id == "toolu_1"
+      assert second.tool_use_id == "toolu_2"
+      text_response("done")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp)
+    allow(Illume.Tools.MCP.ClientMock, self(), pid)
+
+    # The first-requested tool (toolu_1) sleeps longer than the second
+    # (toolu_2) — if ordering were determined by completion time rather
+    # than genuinely preserved by `ordered: true`, toolu_2 would land
+    # first in the result and this test would catch it.
+    stub(Illume.Tools.MCP.ClientMock, :call_tool, fn
+      Illume.MCP.FilesystemClient, "read_text_file", _args ->
+        Process.sleep(300)
+        mcp_text_result("slow file contents")
+
+      Illume.MCP.GitClient, "git_log", _args ->
+        Process.sleep(200)
+        mcp_text_result("fast log")
+    end)
+
+    {elapsed_us, result} = :timer.tc(fn -> Agent.ask(pid, "run two tools") end)
+
+    assert {:ok, "done"} = result
+    # Sequential would be ~500ms (300 + 200); concurrent should be ~300ms.
+    assert elapsed_us / 1000 < 400
+  end
+
+  test "a tool slower than 5s is bounded by tool_timeout, not async_stream's own default timeout",
+       %{tmp_dir: tmp_dir} do
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response("read_file", %{"path" => "a.txt"})
+    end)
+
+    expect(ClientMock, :create, fn params ->
+      assert [_question, _assistant, %{role: "user", content: [result]}] = params.messages
+      refute result.is_error
+      assert result.content =~ "slow but fine"
+      text_response("done")
+    end)
+
+    pid = start_agent(target_dir: tmp_dir, tool_backend: :mcp, tool_timeout: 10_000)
+    allow(Illume.Tools.MCP.ClientMock, self(), pid)
+
+    # Task.Supervisor.async_stream_nolink defaults to a 5s timeout with
+    # on_timeout: :exit, which would kill this very Agent process before
+    # Runner.run/2's own tool_timeout (10s here) ever gets a say. Sleeping
+    # past 5s but under tool_timeout proves the stream itself imposes no
+    # timeout of its own.
+    stub(Illume.Tools.MCP.ClientMock, :call_tool, fn Illume.MCP.FilesystemClient,
+                                                     "read_text_file",
+                                                     _args ->
+      Process.sleep(5_500)
+      mcp_text_result("slow but fine")
+    end)
+
+    assert {:ok, "done"} = Agent.ask(pid, "read a slow file")
+    assert Process.alive?(pid)
   end
 end

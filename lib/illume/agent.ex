@@ -17,10 +17,14 @@ defmodule Illume.Agent do
 
   use GenServer
 
+  alias Illume.LLM.Prompts
   alias Illume.Tools
+  alias Illume.Tools.Runner
 
   @default_max_iterations 10
   @default_tool_timeout 10_000
+  @default_model_timeout 60_000
+  @default_max_tool_concurrency 4
 
   defstruct [
     :target_dir,
@@ -32,6 +36,8 @@ defmodule Illume.Agent do
     iteration: 0,
     max_iterations: @default_max_iterations,
     tool_timeout: @default_tool_timeout,
+    model_timeout: @default_model_timeout,
+    max_tool_concurrency: @default_max_tool_concurrency,
     tool_backend: :direct
   ]
 
@@ -45,6 +51,8 @@ defmodule Illume.Agent do
           iteration: non_neg_integer(),
           max_iterations: pos_integer(),
           tool_timeout: timeout(),
+          model_timeout: timeout(),
+          max_tool_concurrency: pos_integer(),
           tool_backend: Tools.backend()
         }
 
@@ -59,6 +67,7 @@ defmodule Illume.Agent do
     GenServer.call(pid, {:ask, question}, :infinity)
   end
 
+  @spec init(keyword()) :: {:ok, t()}
   @impl true
   def init(opts) do
     target_dir = Keyword.fetch!(opts, :target_dir)
@@ -66,15 +75,20 @@ defmodule Illume.Agent do
     state = %__MODULE__{
       target_dir: target_dir,
       client: Keyword.get(opts, :client, Illume.LLM.AnthropicClient),
-      system: Illume.LLM.Prompts.system(target_dir),
+      system: Prompts.system(target_dir),
       max_iterations: Keyword.get(opts, :max_iterations, @default_max_iterations),
       tool_timeout: Keyword.get(opts, :tool_timeout, @default_tool_timeout),
+      model_timeout: Keyword.get(opts, :model_timeout, @default_model_timeout),
+      max_tool_concurrency:
+        Keyword.get(opts, :max_tool_concurrency, @default_max_tool_concurrency),
       tool_backend: Keyword.get(opts, :tool_backend, :direct)
     }
 
     {:ok, state}
   end
 
+  @spec handle_call({:ask, String.t()}, GenServer.from(), t()) ::
+          {:reply, {:error, :busy}, t()} | {:noreply, t(), {:continue, :call_model}}
   @impl true
   def handle_call({:ask, question}, from, %__MODULE__{status: :idle} = state) do
     state = %{
@@ -91,6 +105,14 @@ defmodule Illume.Agent do
     {:reply, {:error, :busy}, state}
   end
 
+  @doc """
+  Calls the model, then — if it requested tools — runs them concurrently
+  (bounded by `max_tool_concurrency`), each individually isolated and
+  bounded by `tool_timeout` via `Illume.Tools.Runner.run/2`, before
+  looping back to call the model again with the results.
+  """
+  @spec handle_continue(:call_model | {:run_tools, [map()]}, t()) ::
+          {:noreply, t()} | {:noreply, t(), {:continue, :call_model | {:run_tools, [map()]}}}
   @impl true
   def handle_continue(:call_model, state) do
     telemetry([:loop_turn, :start], %{iteration: state.iteration})
@@ -112,7 +134,17 @@ defmodule Illume.Agent do
   end
 
   def handle_continue({:run_tools, tool_uses}, state) do
-    tool_results = Enum.map(tool_uses, &run_tool(&1, state))
+    tool_results =
+      Illume.ToolSupervisor
+      |> Task.Supervisor.async_stream_nolink(tool_uses, &run_tool(&1, state),
+        max_concurrency: state.max_tool_concurrency,
+        ordered: true,
+        timeout: :infinity,
+        on_timeout: :kill_task
+      )
+      |> Enum.zip(tool_uses)
+      |> Enum.map(&tool_stream_result/1)
+
     state = %{state | messages: [%{role: "user", content: tool_results} | state.messages]}
     telemetry([:loop_turn, :stop], %{iteration: state.iteration})
     {:noreply, state, {:continue, :call_model}}
@@ -126,9 +158,12 @@ defmodule Illume.Agent do
       messages: Enum.reverse(state.messages)
     }
 
-    state.client.create(params)
-  rescue
-    e -> {:error, e}
+    fun = fn -> state.client.create(params) end
+
+    case Runner.run(fun, state.model_timeout) do
+      {:ok, result} -> result
+      error -> error
+    end
   end
 
   @spec handle_model_response([map()], t()) ::
@@ -163,6 +198,14 @@ defmodule Illume.Agent do
     {:noreply, %{state | status: :done, from: nil}}
   end
 
+  @spec tool_stream_result({{:ok, map()} | {:exit, term()}, map()}) :: map()
+  defp tool_stream_result({{:ok, result}, _tool_use}), do: result
+
+  defp tool_stream_result({{:exit, reason}, %{"id" => id, "name" => name}}) do
+    telemetry([:tool_call, :exception], %{name: name, reason: reason})
+    tool_result(id, "tool #{name} crashed: #{inspect(strip_stacktrace(reason))}", true)
+  end
+
   @spec run_tool(map(), t()) :: map()
   defp run_tool(%{"id" => id, "name" => name, "input" => input}, state) do
     telemetry([:tool_call, :start], %{name: name})
@@ -179,7 +222,7 @@ defmodule Illume.Agent do
   defp run_allowed_tool(id, name, input, state) do
     fun = fn -> Tools.dispatch(name, input, state.target_dir, state.tool_backend) end
 
-    case Illume.Tools.Runner.run(fun, state.tool_timeout) do
+    case Runner.run(fun, state.tool_timeout) do
       {:ok, {:ok, result}} ->
         telemetry([:tool_call, :stop], %{name: name})
         tool_result(id, to_content_string(result), false)
@@ -194,7 +237,7 @@ defmodule Illume.Agent do
 
       {:error, {:crashed, reason}} ->
         telemetry([:tool_call, :exception], %{name: name, reason: reason})
-        tool_result(id, "tool #{name} crashed: #{inspect(reason)}", true)
+        tool_result(id, "tool #{name} crashed: #{inspect(strip_stacktrace(reason))}", true)
     end
   end
 
@@ -216,8 +259,20 @@ defmodule Illume.Agent do
   end
 
   @spec format_error(term()) :: String.t()
+  defp format_error(:timeout), do: "model call timed out"
+
+  defp format_error({:crashed, {exception, _stacktrace}}) when is_exception(exception),
+    do: Exception.message(exception)
+
+  defp format_error({:crashed, reason}),
+    do: "model call crashed: #{inspect(strip_stacktrace(reason))}"
+
   defp format_error(reason) when is_exception(reason), do: Exception.message(reason)
   defp format_error(reason), do: inspect(reason)
+
+  @spec strip_stacktrace(term()) :: term()
+  defp strip_stacktrace({reason, stacktrace}) when is_list(stacktrace), do: reason
+  defp strip_stacktrace(reason), do: reason
 
   @spec telemetry([atom()], map()) :: :ok
   defp telemetry(event_suffix, metadata) do

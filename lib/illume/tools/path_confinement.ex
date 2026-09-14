@@ -27,7 +27,17 @@ defmodule Illume.Tools.PathConfinement do
     end
   end
 
-  @doc "Whether `path` resolves to somewhere inside `root`, symlinks included."
+  @doc """
+  Whether `path` resolves to somewhere inside `root`, symlinks included.
+
+  `path` should already be absolute. A relative `path` is still resolved
+  (via `real_path/1`'s `Path.expand/1`), but against this VM's own working
+  directory — not `root` — since `Path.expand/1`'s single-argument form
+  has no other base to use. A caller confining a path that didn't
+  originate locally (e.g. from an external process) should verify
+  `Path.type(path) == :absolute` itself before calling this, rather than
+  relying on whatever happens to be true of the process's cwd.
+  """
   @spec within?(Path.t(), Path.t()) :: boolean()
   def within?(path, root) do
     case {real_path(path), real_path(root)} do
@@ -54,6 +64,7 @@ defmodule Illume.Tools.PathConfinement do
     |> resolve_segments("/", 0)
   end
 
+  @spec resolve_segments([String.t()], String.t(), non_neg_integer()) :: Path.t() | nil
   defp resolve_segments(_segments, _resolved, hops) when hops > @max_symlink_hops, do: nil
   defp resolve_segments([], resolved, _hops), do: resolved
 

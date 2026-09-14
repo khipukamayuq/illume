@@ -7,21 +7,27 @@ defmodule Illume.Tools.MCP do
 
   Client processes are started per-CLI-invocation (the target directory is
   only known at runtime) under `Illume.MCPSupervisor`, not declared
-  statically in `Illume.Application`.
-
-  The filesystem and git clients are given distinct `client_info["name"]`
-  values (`start_clients/1`) rather than sharing one: `Anubis.Client.Cache`
-  keys its (per-process, `:private`) ETS tool-validator table by that name
-  alone, not by client process, so two clients sharing a name collide on
-  the same table and crash with an ETS "insufficient access rights" error
-  on any tool result that carries `structuredContent` — which includes
-  every `isError` result.
+  statically in `Illume.Application`. The filesystem and git clients must
+  keep distinct `client_info["name"]` values, or they collide on a shared
+  `Anubis.Client.Cache` ETS table (see DECISIONS.md entry 14).
 
   All calls to `Anubis.Client` go through `client_adapter/0`
   (`Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)`)
   rather than calling `Anubis.Client` directly, so tests can inject a Mox
   double instead of spawning real `npx`/`uvx` server processes.
+
+  `search_files/2` is never handed input validation by
+  `Illume.Tools.validate_input/3`, so it re-filters its own matches
+  through `Illume.Tools.PathConfinement.within?/2`: anything that resolves
+  outside `target_dir`, or isn't already absolute, is dropped and reported
+  via `[:illume, :mcp, :confinement_violation]` telemetry rather than
+  silently ignored (see DECISIONS.md entries 39 and 47). It also
+  distinguishes the server's own "no matches" from confinement dropping
+  every match it returned, so the model isn't told "there is no such
+  file" when matches existed but were suppressed.
   """
+
+  alias Illume.Tools.PathConfinement
 
   @filesystem_client Illume.MCP.FilesystemClient
   @git_client Illume.MCP.GitClient
@@ -46,8 +52,9 @@ defmodule Illume.Tools.MCP do
     end
   end
 
+  @doc "Stop every MCP client process currently running under `Illume.MCPSupervisor`."
   @spec stop_clients() :: :ok
-  defp stop_clients do
+  def stop_clients do
     for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(Illume.MCPSupervisor) do
       DynamicSupervisor.terminate_child(Illume.MCPSupervisor, pid)
     end
@@ -82,11 +89,14 @@ defmodule Illume.Tools.MCP do
 
   @spec search_files(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
   def search_files(target_dir, %{"pattern" => pattern}) do
-    call(@filesystem_client, "search_files", %{
-      "path" => target_dir,
-      "pattern" => pattern,
-      "excludePatterns" => []
-    })
+    case call(@filesystem_client, "search_files", %{
+           "path" => target_dir,
+           "pattern" => pattern,
+           "excludePatterns" => []
+         }) do
+      {:ok, text} -> {:ok, confine_matches(text, target_dir)}
+      error -> error
+    end
   end
 
   @spec git_log(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
@@ -113,6 +123,46 @@ defmodule Illume.Tools.MCP do
   @spec client_adapter() :: module()
   defp client_adapter,
     do: Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)
+
+  @no_matches_text "No matches found"
+  @no_matches_within_target_text "No matches found within the target directory."
+
+  @spec confine_matches(String.t(), Path.t()) :: String.t()
+  defp confine_matches(text, target_dir) do
+    if String.trim(text) == @no_matches_text do
+      text
+    else
+      root = Path.expand(target_dir)
+      lines = String.split(text, "\n", trim: true)
+      {kept, dropped} = Enum.split_with(lines, &within_confinement?(&1, root))
+      join_matches(kept, dropped)
+    end
+  end
+
+  @spec join_matches([String.t()], [String.t()]) :: String.t()
+  defp join_matches([], []), do: @no_matches_text
+  defp join_matches([], _dropped), do: @no_matches_within_target_text
+  defp join_matches(lines, _dropped), do: Enum.join(lines, "\n")
+
+  @spec within_confinement?(String.t(), Path.t()) :: boolean()
+  defp within_confinement?(path, root) do
+    if Path.type(path) == :absolute and PathConfinement.within?(path, root) do
+      true
+    else
+      reject_out_of_bounds(path, root)
+    end
+  end
+
+  @spec reject_out_of_bounds(String.t(), Path.t()) :: false
+  defp reject_out_of_bounds(path, root) do
+    :telemetry.execute(
+      [:illume, :mcp, :confinement_violation],
+      %{system_time: System.system_time()},
+      %{tool: "search_files", path: path, root: root}
+    )
+
+    false
+  end
 
   @spec extract_text(term()) :: String.t()
   defp extract_text(%{"content" => content}) when is_list(content) do

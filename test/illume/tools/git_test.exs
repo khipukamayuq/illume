@@ -65,14 +65,25 @@ defmodule Illume.Tools.GitTest do
     assert {:error, _message} = Git.git_show(tmp_dir, %{"revision" => "not-a-real-revision"})
   end
 
-  test "git_show rejects a revision that looks like a flag", %{tmp_dir: tmp_dir} do
+  test "git_show is safe on its own, even called directly and bypassing Illume.Tools.validate_input/3",
+       %{tmp_dir: tmp_dir} do
     init_repo(tmp_dir)
     commit!(tmp_dir, "a.txt", "hello", "add a.txt")
 
-    assert {:error, message} =
-             Git.git_show(tmp_dir, %{"revision" => "--upload-pack=touch /tmp/pwned"})
+    canary = Path.join(System.tmp_dir!(), "illume-git-show-direct-call-test")
+    File.rm(canary)
+    on_exit(fn -> File.rm(canary) end)
 
-    assert message =~ "invalid revision"
+    # --end-of-options shields `revision` from being parsed as a flag,
+    # without the side effect a bare `--` would have (switching git show
+    # into pathspec-only mode, silently no-opping on a real revision
+    # instead of resolving it — see the "shows a commit's message and
+    # diff" test above for proof a real revision still works). This makes
+    # git_show/2 safe on its own, not solely dependent on
+    # Illume.Tools.validate_input/3's separate leading-dash check.
+    assert {:error, message} = Git.git_show(tmp_dir, %{"revision" => "--output=#{canary}"})
+    assert message =~ "must come before non-option arguments"
+    refute File.exists?(canary)
   end
 
   test "git_show requires a revision" do

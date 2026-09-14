@@ -23,15 +23,15 @@ defmodule Illume.Tools.Git do
 
   @doc """
   Show a single commit's message and diff. `input` is
-  `%{"revision" => git_revision}`.
+  `%{"revision" => git_revision}`. `--end-of-options` shields `revision`
+  from being parsed as a flag, so this is safe to call directly —
+  `Illume.Tools.validate_input/3`'s leading-dash rejection (run first via
+  `Illume.Tools.dispatch/4`) is a fail-fast on top of this, not the only
+  defense (see DECISIONS.md entry 46).
   """
   @spec git_show(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
   def git_show(target_dir, %{"revision" => revision}) do
-    if String.starts_with?(revision, "-") do
-      {:error, "invalid revision: #{revision}"}
-    else
-      run(target_dir, ["show", "--stat", "-p", revision])
-    end
+    run(target_dir, ["show", "--stat", "-p", "--end-of-options", revision])
   end
 
   def git_show(_target_dir, _input), do: {:error, "missing required input: revision"}

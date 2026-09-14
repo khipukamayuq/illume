@@ -8,7 +8,8 @@ defmodule Illume.MixProject do
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      escript: [main_module: Illume.CLI]
+      escript: [main_module: Illume.CLI],
+      dialyzer: [plt_file: {:no_warn, "priv/plts/dialyzer.plt"}]
     ]
   end
 
@@ -27,7 +28,9 @@ defmodule Illume.MixProject do
       {:telemetry, "~> 1.2"},
       {:mox, "~> 1.1", only: :test},
       {:plug, "~> 1.18", only: :test},
-      {:anubis_mcp, "~> 2.0"}
+      {:anubis_mcp, "~> 2.0"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 end
