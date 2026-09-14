@@ -36,6 +36,17 @@ defmodule Illume.Tools.MCP do
   but `PathConfinement.within?/2` itself would otherwise resolve a
   relative one against this VM's own working directory, not `target_dir`,
   which is the wrong base entirely for an external server's response.
+
+  `confine_matches/2` distinguishes the server's own "no matches" from
+  confinement dropping every match it returned, so the model isn't told
+  "there is no such file" when out-of-bounds matches were actually found
+  and suppressed. The server's matches arrive as a single newline-joined
+  string rather than a real list, so a filename containing a literal
+  newline is inherently ambiguous at this transport boundary — the
+  `structuredContent` field carries the identical joined string, not an
+  array, so it offers no way around this. Accepted as-is: not an escape
+  risk (such a match still can't resolve outside `target_dir`), and
+  exceptionally unlikely for the Elixir codebases this tool targets.
   """
 
   alias Illume.Tools.PathConfinement
@@ -136,35 +147,43 @@ defmodule Illume.Tools.MCP do
     do: Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)
 
   @no_matches_text "No matches found"
+  @no_matches_within_target_text "No matches found within the target directory."
 
   @spec confine_matches(String.t(), Path.t()) :: String.t()
-  defp confine_matches(@no_matches_text = text, _target_dir), do: text
-
   defp confine_matches(text, target_dir) do
-    root = Path.expand(target_dir)
-
-    text
-    |> String.split("\n", trim: true)
-    |> Enum.filter(&within_confinement?(&1, root))
-    |> case do
-      [] -> @no_matches_text
-      lines -> Enum.join(lines, "\n")
+    if String.trim(text) == @no_matches_text do
+      text
+    else
+      root = Path.expand(target_dir)
+      lines = String.split(text, "\n", trim: true)
+      {kept, dropped} = Enum.split_with(lines, &within_confinement?(&1, root))
+      join_matches(kept, dropped)
     end
   end
+
+  @spec join_matches([String.t()], [String.t()]) :: String.t()
+  defp join_matches([], []), do: @no_matches_text
+  defp join_matches([], _dropped), do: @no_matches_within_target_text
+  defp join_matches(lines, _dropped), do: Enum.join(lines, "\n")
 
   @spec within_confinement?(String.t(), Path.t()) :: boolean()
   defp within_confinement?(path, root) do
     if Path.type(path) == :absolute and PathConfinement.within?(path, root) do
       true
     else
-      :telemetry.execute(
-        [:illume, :mcp, :confinement_violation],
-        %{system_time: System.system_time()},
-        %{tool: "search_files", path: path, root: root}
-      )
-
-      false
+      reject_out_of_bounds(path, root)
     end
+  end
+
+  @spec reject_out_of_bounds(String.t(), Path.t()) :: false
+  defp reject_out_of_bounds(path, root) do
+    :telemetry.execute(
+      [:illume, :mcp, :confinement_violation],
+      %{system_time: System.system_time()},
+      %{tool: "search_files", path: path, root: root}
+    )
+
+    false
   end
 
   @spec extract_text(term()) :: String.t()

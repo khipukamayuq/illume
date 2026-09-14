@@ -50,6 +50,14 @@ defmodule Illume.Tools.MCPTest do
     assert MCP.search_files("/target", %{"pattern" => "nope"}) == {:ok, "No matches found"}
   end
 
+  test "search_files tolerates trailing whitespace on the server's sentinel" do
+    expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
+      text_result("No matches found\n")
+    end)
+
+    assert MCP.search_files("/target", %{"pattern" => "nope"}) == {:ok, "No matches found\n"}
+  end
+
   test "search_files filters out a match that resolves outside target_dir" do
     expect(ClientMock, :call_tool, fn Illume.MCP.FilesystemClient, "search_files", _args ->
       text_result("/target/lib/foo.ex\n/etc/passwd")
@@ -93,7 +101,9 @@ defmodule Illume.Tools.MCPTest do
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
-    assert MCP.search_files("/target", %{"pattern" => "*"}) == {:ok, "No matches found"}
+    assert MCP.search_files("/target", %{"pattern" => "*"}) ==
+             {:ok, "No matches found within the target directory."}
+
     assert_receive {:telemetry_event, metadata}
     assert metadata.tool == "search_files"
     assert metadata.path == "/etc/passwd"
