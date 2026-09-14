@@ -504,6 +504,27 @@ checking confinement at all, and documented the precondition on both
 `within?/2` never having advertised this requirement is how the gap
 arose in the first place.
 
+### 48. Low-severity review findings fixed as a follow-up batch
+**Date:** 2026-09-14 · **Status:** Fixed
+The same review that produced entries 45-47 also flagged six Low-severity
+items. All fixed: (1-2) a shared `strip_stacktrace/1` helper now keeps
+`format_error/1`'s crash fallback, `tool_stream_result/1`'s `{:exit,
+reason}` clause, and `run_allowed_tool/4`'s `{:crashed, reason}` branch
+from `inspect/1`-ing a raw exit reason's full stacktrace (verified via a
+Task that `throw/1`s a non-exception value); (3) `confine_matches/2` in
+`lib/illume/tools/mcp.ex` now distinguishes "confinement dropped every
+match" from "the server found nothing," and its sentinel-passthrough
+check is trim-tolerant instead of exact-match; (4) the newline-in-
+filename transport ambiguity has no real fix (checked the review's
+suggested one — `structuredContent` returns the identical joined
+string, not an array, per the live probe behind entry 39) and is
+documented as an accepted limitation instead; (5) the concurrency
+test's timing margin widened from ~30-50ms of slack to ~100ms; (6)
+`within_confinement?/2`'s side-effecting `else` branch extracted into a
+named function. Each behavioral fix was reverted and re-tested to
+confirm its accompanying test actually catches the regression before
+being restored, consistent with every other fix in this pass.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
