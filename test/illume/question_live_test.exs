@@ -89,6 +89,56 @@ defmodule Illume.QuestionLiveTest do
     assert socket.assigns.asking? == false
   end
 
+  describe "telemetry coverage" do
+    test "terminate/2 detaches the telemetry handler mount/3 attached" do
+      # Mirrors what `mount/3`'s `attach_telemetry/1` does for a connected
+      # socket, then calls `terminate/2` directly — the same "exercise
+      # the callback as a plain function" approach already used above
+      # for `handle_async/3`'s `{:exit, reason}` case, rather than
+      # killing a real LiveView process and fighting its test-harness
+      # process topology (the proxy process `live_isolated/3` links in
+      # isn't the same pid as `view.pid`, so unlinking just the latter
+      # still let the former's exit signal reach this test).
+      handler_id = {QuestionLive, self()}
+
+      :telemetry.attach_many(
+        handler_id,
+        [[:illume, :model_call, :start]],
+        &QuestionLive.forward_telemetry/4,
+        self()
+      )
+
+      socket = %Phoenix.LiveView.Socket{assigns: %{telemetry_handler_id: handler_id}}
+      QuestionLive.terminate(:shutdown, socket)
+
+      refute Enum.any?(
+               :telemetry.list_handlers([:illume, :model_call, :start]),
+               &(&1.id == handler_id)
+             )
+    end
+
+    test "a tool_call telemetry event renders the \"Running: <name>\" status line", %{
+      conn: conn
+    } do
+      test_pid = self()
+
+      expect(ClientMock, :create, fn _params ->
+        send(test_pid, :model_called)
+        Process.sleep(150)
+        text_response("done")
+      end)
+
+      {:ok, view, _html} = live_isolated(conn, QuestionLive)
+      render_submit(view, "ask", %{"question" => "slow?"})
+      assert_receive :model_called, 500
+
+      :telemetry.execute([:illume, :tool_call, :start], %{}, %{name: "read_file"})
+
+      assert render(view) =~ "Running: read_file"
+      assert render_async(view, 500) =~ "done"
+    end
+  end
+
   describe "server-side ask guard" do
     test "a second ask while asking? is already true is a no-op", %{conn: conn} do
       test_pid = self()

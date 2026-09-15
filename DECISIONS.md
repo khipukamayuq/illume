@@ -1089,6 +1089,41 @@ the completion signal was; empirically, across the same 5-seed run, this
 one never failed. Widened it to 500ms per the plan's own instruction
 regardless, as a consistency/margin improvement.
 
+### 69. Coverage for telemetry handler detach and the `tool_call` status-line clause
+**Date:** 2026-09-14 · **Status:** Done
+Two coverage gaps from the review: `terminate/2`'s `:telemetry.detach/1`
+call had no test proving it actually runs (only that it exists), and
+`status_line_for/2`'s `"Running: #{name}"` clause (for
+`[:illume, :tool_call, :start]`) had zero coverage — only
+`model_call`/`loop_turn` events were ever exercised.
+
+The detach test originally tried killing a real `live_isolated/3` view
+process and asserting the handler was gone — this repeatedly crashed the
+*test* process itself (`** (EXIT ...) shutdown`) even after
+`Process.unlink(view.pid)`, because `view.pid` (the real LiveView PID)
+isn't the process the test harness actually links the test process to —
+that's a separate `proxy` process on the same `%View{}` struct
+(`deps/phoenix_live_view/lib/phoenix_live_view/test/structs.ex:20`), so
+unlinking the wrong pid left the real link intact. Switched to the same
+"exercise the callback as a plain function" approach
+`question_live_test.exs`'s existing `handle_async/3` `{:exit, reason}`
+test already uses: attach a handler exactly as `mount/3`'s
+`attach_telemetry/1` would, build a socket with that handler id in
+`assigns`, call `QuestionLive.terminate/2` directly, assert the handler
+is gone from `:telemetry.list_handlers/1`. No real process needed, no
+process-topology guesswork, and it actually tests the same code path.
+
+The status-line test fires `:telemetry.execute([:illume, :tool_call,
+:start], %{}, %{name: "read_file"})` directly at the test process while
+a real slow mocked call is in flight (`asking?` true) — safe to assert
+`render(view)` immediately after, no race: `:telemetry.execute/3` runs
+its handlers (which `send/2` to the LiveView) synchronously in the
+*calling* process, and `render/1`'s own call goes out from that same
+process right after, so both messages reach the LiveView process in the
+order they were sent (see entry 68's `render_async/2` fix for why
+message *destination*, not just program order, is what determines
+whether this reasoning holds).
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
