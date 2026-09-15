@@ -897,6 +897,21 @@ every layer (`curl`, `Phoenix.Endpoint.call/2`, even `Mix.raise`-style
 rescues). The telemetry event's `reason` field bypasses that masking
 entirely.
 
+### 62. `put_secure_browser_headers/2` doesn't set `x-frame-options` in this Phoenix version
+**Date:** 2026-09-14 · **Status:** Done
+The hardening plan's own test wording for the standard `:browser` pipeline
+plugs (P2-T4) assumed `x-frame-options` would be one of the asserted
+headers. Reading `Phoenix.Controller.put_secure_defaults/1` directly
+(Phoenix 1.8.14) shows it actually sets `referrer-policy`,
+`content-security-policy`, `x-content-type-options`, and
+`x-permitted-cross-domain-policies` — no `x-frame-options` (superseded by
+the CSP's `frame-ancestors 'self'` directive). `test/illume/endpoint_test.exs`
+asserts the headers Phoenix actually sets, not the plan's original guess.
+
+`Phoenix.ConnTest`'s `use Phoenix.ConnTest` is deprecated in this
+Phoenix version in favor of `import Plug.Conn; import Phoenix.ConnTest`
+— used the latter here.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
