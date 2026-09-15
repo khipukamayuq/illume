@@ -15,6 +15,11 @@ defmodule Mix.Tasks.Illume.Server do
 
   `target_dir` for the web form is illume's own checkout, hardcoded in
   `Illume.QuestionLive` — never free text from an HTTP request.
+
+  Ctrl-C during `mix illume.server` just kills the BEAM without running
+  any `terminate/2` cleanup: Elixir cannot trap `:sigint` (see
+  DECISIONS.md entry 41), the same limitation `Illume.CLI`'s moduledoc
+  already documents for `--mcp`/`--serve`.
   """
 
   @shortdoc "Starts the Illume LiveView web server"
