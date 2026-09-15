@@ -1124,6 +1124,48 @@ order they were sent (see entry 68's `render_async/2` fix for why
 message *destination*, not just program order, is what determines
 whether this reasoning holds).
 
+### 70. In-process `--serve` boot coverage — deviated from the plan's exact transport, for safety
+**Date:** 2026-09-14 · **Status:** Done
+The review's own gap: the default `mix test` run had zero coverage that
+`--serve` boots anything — only the `:e2e`-tagged, excluded-by-default
+`mcp_server_e2e_test.exs` (a real OS subprocess) proves it. The hardening
+plan's task called for starting `Illume.MCPServerSupervisor`'s child
+in-process with the real `transport: :stdio`, the same child spec
+`Illume.CLI.serve/1` uses.
+
+**Tried exactly that first, empirically, before writing the real test —
+and it's unsafe to run inside the shared `mix test` BEAM.** Reproduced in
+a throwaway script: `DynamicSupervisor.start_child(Illume.MCPServerSupervisor,
+{Illume.MCPServer, transport: :stdio})` triggered the stdin-EOF restart
+storm entry 53 already documented (`Anubis.Server.Supervisor`'s
+`:one_for_all` group hitting immediate EOF and restarting, with no
+backoff) — but *synchronously, within the `start_child/2` call itself*,
+before it even returned a pid. `mix test`'s own stdin is already closed
+(no interactive terminal, no piped input), unlike a real subprocess's
+stdin, which stays open until an actual client disconnects — so the
+storm entry 53 describes as "exhausts the default restart intensity
+within milliseconds" starts *immediately* here, not after a client
+connects and later leaves. `Illume.CLI.serve/1`'s own mitigation
+(`await_server_exit/1`, entry 53) only handles the escript's *top-level*
+pid dying gracefully — it does nothing to prevent the nested storm
+itself, which is fine for a real CLI invocation (the whole OS process
+exits either way) but would risk exceeding `Illume.MCPServerSupervisor`'s
+own restart budget and crashing the shared test VM if triggered inside
+`mix test`.
+
+Used `{:streamable_http, start: true}` instead — a transport
+`anubis_mcp` supports that touches no real stdio and doesn't bind a
+network port itself (it's meant to be mounted into a host Plug/Phoenix
+router, not run standalone), confirmed empirically safe (starts cleanly,
+no storm, terminates cleanly) across repeated runs. This proves the
+actual thing this task's coverage gap was about — `Illume.MCPServerSupervisor`
+accepts `Illume.MCPServer`'s child spec and it initializes without
+crashing — without the specific transport atom mattering to that claim.
+Tool-registration correctness itself was already covered directly by
+`mcp_server_test.exs`'s `init/2` test; this only closes the "does
+starting it under the real supervisor work at all" gap, in a new
+`test/illume/mcp_server_boot_test.exs`.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
