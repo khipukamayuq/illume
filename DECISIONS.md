@@ -1047,6 +1047,48 @@ reconstruct an equivalent spike from scratch if a future
 real endpoint (now that Phase 1 landed) rather than a throwaway
 `SpikeLive`.
 
+### 68. De-flaked `question_live_test.exs`'s wait pattern — `render_async/2`, not a hand-rolled message
+**Date:** 2026-09-14 · **Status:** Done
+The review flagged the `wait_for/2` polling helper (`Process.sleep(25)` in
+a bounded retry loop, used in what was then 3 tests, plus a fourth added
+by P2-T1 in this same pass) and a tight `assert_receive :model_called,
+100` as flaky by construction.
+
+The plan's own proposed fix — have the mocked `ClientMock.create/1` also
+`send(test_pid, :model_done)` right before returning, then
+`assert_receive :model_done` before the final `render/1` — **was tried
+and empirically failed**: run 5 times with different seeds, 2 of the 4
+tests using it failed non-deterministically (asserting "first answer"/
+"slow answer" but getting "Thinking…"/"Calling the model…" instead).
+Root cause: `send/2` only guarantees FIFO order between one sender and
+one receiver. The mocked function runs *inside* `start_async`'s spawned
+Task; `send(test_pid, :model_done)` and the Task's own internal
+completion message to the LiveView process go to two *different*
+receivers, so there's no ordering guarantee between "the test process
+observed `:model_done`" and "the LiveView process finished handling the
+task result and updated its assigns" — exactly the race this was meant
+to remove, just with a much smaller (and non-deterministic) window
+instead of the polling loop's larger one.
+
+Used `Phoenix.LiveViewTest.render_async/2` instead — a built-in helper
+(`deps/phoenix_live_view/lib/phoenix_live_view/test/live_view_test.ex:1062`)
+built for exactly this, that `Process.monitor`s the actual `start_async`
+task pids and blocks on their `:DOWN`, then renders. This sidesteps the
+two-receiver race entirely: the monitor and the render both go through
+messages *to the same LiveView proxy process*, so FIFO ordering actually
+holds. Needed an explicit `500` timeout on the two calls following a
+`Process.sleep(150)` mock (the default is `ex_unit`'s
+`assert_receive_timeout`, 100ms — too short for this suite's existing
+`Process.sleep(150)` fixtures). The one still-`assert_receive`-based
+check (`:model_called`, confirming the *interim* "Calling the model…"
+status line before the mocked call finishes) stayed as message-based and
+needed no change — that message is forwarded from a `:telemetry` event
+fired synchronously in the real `Illume.Agent` process *before* it calls
+the mocked client at all, not raced against a second receiver the way
+the completion signal was; empirically, across the same 5-seed run, this
+one never failed. Widened it to 500ms per the plan's own instruction
+regardless, as a consistency/margin improvement.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
