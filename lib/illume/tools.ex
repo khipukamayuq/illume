@@ -30,6 +30,14 @@ defmodule Illume.Tools do
 
   `grep_content` has no MCP equivalent (neither reference server exposes
   content search), so it always runs locally regardless of backend.
+
+  `validate_input/3` also rejects a non-`String.t()` `read_file` path,
+  `search_files`/`grep_content` pattern, or `grep_content`'s optional
+  `path` (guarded only when present — a missing one legitimately means
+  "search the whole target dir", `Illume.Tools.Grep.grep_content/2`'s own
+  default) before any of them reach `Path.expand/2`/`Path.join/2`, so
+  malformed input from an external MCP client can't crash the session
+  (see DECISIONS.md entry 65).
   """
 
   alias Illume.Tools.{Filesystem, Git, Grep, MCP, PathConfinement}
@@ -78,10 +86,6 @@ defmodule Illume.Tools do
     {:error, "invalid pattern: #{inspect(pattern)}"}
   end
 
-  # `grep_content`'s `path` (unlike `read_file`'s) is optional — only
-  # guard it when present and wrong-typed; a missing `path` legitimately
-  # means "search the whole target dir" (`Illume.Tools.Grep.grep_content/2`'s
-  # own default).
   defp validate_input("grep_content", %{"path" => path}, _target_dir) when not is_binary(path) do
     {:error, "invalid path: #{inspect(path)}"}
   end

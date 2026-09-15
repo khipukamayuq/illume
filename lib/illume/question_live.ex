@@ -7,6 +7,16 @@ defmodule Illume.QuestionLive do
   never form input; the spec requires this endpoint never accept an
   arbitrary filesystem path from an HTTP request (see DECISIONS.md
   entry 58).
+
+  `handle_event/3` rejects an `ask` server-side (not just via the
+  client-side `disabled` attribute) when already asking, the question is
+  empty, over 4000 bytes, or not a string (DECISIONS.md entries 63, 65),
+  and requires the bearer token `mix illume.server` prints in its startup
+  URL (checked in both `mount/3` and `handle_event/3`, DECISIONS.md entry
+  64). The status line reflects `:telemetry` events from every in-flight
+  agent, not just this connection's own, while `asking?` — a known,
+  documented gap (see DECISIONS.md's Known Gaps entry on the telemetry
+  cross-session leak), not something the `asking?` check closes.
   """
 
   use Phoenix.LiveView
@@ -17,11 +27,6 @@ defmodule Illume.QuestionLive do
 
   @target_dir Path.expand("../..", __DIR__)
 
-  # Server-side enforcement of the guard the UI already displays
-  # client-side (disabling the form while `asking?`) — a non-browser
-  # client can send `phx-submit` events directly over the socket, so the
-  # client-side `disabled` attribute alone is not a real guard (see
-  # DECISIONS.md entry 63).
   @max_question_bytes 4_000
 
   @telemetry_events [
@@ -46,12 +51,6 @@ defmodule Illume.QuestionLive do
      )}
   end
 
-  # `mix illume.server` generates a token once per run and prints it as
-  # part of the startup URL (`?token=...`); `:web_token` is unset when
-  # the endpoint is started any other way (tests, or a hypothetical
-  # direct `Illume.Endpoint` start), in which case the page stays
-  # unauthenticated, same as before this check existed. See DECISIONS.md
-  # entry 64.
   @spec authorized?(map() | :not_mounted_at_router) :: boolean()
   defp authorized?(%{"token" => token}) when is_binary(token) do
     case Application.get_env(:illume, :web_token) do
@@ -60,8 +59,6 @@ defmodule Illume.QuestionLive do
     end
   end
 
-  # `live_isolated/3` (no real router params) or a mount with no `token`
-  # query param at all — authorized only if no token is configured.
   defp authorized?(_params), do: Application.get_env(:illume, :web_token) == nil
 
   # Only the connected mount (not the initial static render) gets a handler
@@ -146,12 +143,6 @@ defmodule Illume.QuestionLive do
     end
   end
 
-  # A non-string (or missing) `question` can only come from a raw socket
-  # frame, never the real form (its `<input>` always submits a string) —
-  # `String.trim/1` below would otherwise raise `FunctionClauseError` and
-  # crash this session, the same input-validation class this pass already
-  # closed at the MCP boundary (`Illume.Tools.validate_input/3`, DECISIONS.md
-  # entry 65).
   def handle_event("ask", _params, socket), do: {:noreply, socket}
 
   # Test-only seam, same shape as `Illume.Tools.MCP.client_adapter/0`: lets
@@ -185,13 +176,6 @@ defmodule Illume.QuestionLive do
      )}
   end
 
-  # `:telemetry` events aren't scoped to a request — every LiveView
-  # connection's handler receives every agent's events. This guard only
-  # suppresses display while *this* connection is idle (`asking?` false);
-  # while it's actually waiting on an answer, another session's in-flight
-  # `tool_call` names still surface here — a real, documented, deliberately
-  # deferred gap, not one this guard closes (see DECISIONS.md's Known Gaps
-  # entry on the telemetry cross-session leak).
   @impl true
   def handle_info({:illume_telemetry, event, _measurements, metadata}, socket) do
     if socket.assigns.asking? do

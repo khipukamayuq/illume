@@ -1255,6 +1255,27 @@ comments) resolve to "no code change" — each was reviewed and judged
 correctly scoped/documented already. Full triage record in
 `.claude/plans/mcp-server-and-web-hardening/reviews/mcp-server-and-web-hardening-triage.md`.
 
+### 75. Moved this pass's own inline comments into moduledocs, per the user's stated convention
+**Date:** 2026-09-15 · **Status:** Done
+The user's standing preference for this codebase: no inline comments in
+`lib/` code beyond what's genuinely non-obvious test setup (fine in
+`test/`); anything explaining *why* code is the way it is belongs in the
+owning module's `@moduledoc`/`@doc` if it's relevant to someone calling
+the module, or in `DECISIONS.md` if it's historical/rationale that
+doesn't bear on using the module. Every inline comment this hardening
+pass had added (`lib/illume/endpoint.ex`, `question_live.ex`,
+`mcp_server.ex`, `tools.ex`, `lib/mix/tasks/illume.server.ex`,
+`config/dev.exs`, `config/runtime.exs`) was reassessed against that rule:
+condensed into a sentence or two in the relevant moduledoc, with the
+inline comment removed — the full detail already lived in DECISIONS.md
+entries 61-74 either way, so nothing was lost, just de-duplicated. Two
+pre-existing comment blocks in `question_live.ex` (`attach_telemetry/1`,
+`qa_opts/0`) predate this hardening pass and were left as-is — the user
+scoped this cleanup to comments introduced by this pass, not a repo-wide
+sweep. Test-file comments (all explaining non-obvious test setup —
+mock/timing choices, why a test is structured a particular way) were
+kept, matching the user's own stated exception.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.

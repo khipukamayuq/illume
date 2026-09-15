@@ -17,6 +17,11 @@ defmodule Illume.MCPServer do
   {:ok, params} end` — leaving it `nil` makes `anubis_mcp` silently
   replace real client arguments with `%{}` before dispatch ever sees them.
   See DECISIONS.md entry 49.
+
+  `to_content_string/1`'s catch-all `inspect/1` clause is only ever
+  reached today because every tool in `Illume.Tools.specs()` returns a
+  string or a list of strings; a future tool returning something else
+  would silently change what the MCP client sees instead of erroring.
   """
 
   use Anubis.Server, name: "illume", version: "0.1.0", capabilities: [:tools]
@@ -58,11 +63,6 @@ defmodule Illume.MCPServer do
     %{frame | tools: Map.put(frame.tools, name, tool)}
   end
 
-  # The catch-all `inspect/1` clause is only ever reached today because
-  # every tool in `Illume.Tools.specs()` returns a string or a list of
-  # strings — `inspect/1` output isn't meant for MCP client consumption,
-  # so if a future tool starts returning something else (e.g. a map),
-  # this silently changes what the client sees instead of erroring.
   @doc false
   @spec to_content_string(term()) :: String.t()
   def to_content_string(result) when is_binary(result), do: result

@@ -5,6 +5,10 @@ defmodule Illume.Endpoint do
   it, on demand, under its own supervisor (see DECISIONS.md entry 55). The
   plain CLI (`./illume <target_dir> "<question>"`) never touches this
   module at all.
+
+  The two `Plug.Static` entries serve `phoenix.js`/`phoenix_live_view.js`
+  straight from the `phoenix`/`phoenix_live_view` deps' own `priv/static`,
+  not a copy under this app's own `priv/static` — see DECISIONS.md entry 61.
   """
 
   use Phoenix.Endpoint, otp_app: :illume
@@ -18,10 +22,6 @@ defmodule Illume.Endpoint do
 
   socket "/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]]
 
-  # Served straight from the deps' own `priv/static` (`Plug.Static`'s `:from`
-  # tuple resolves via `Application.app_dir/1`, which works for any loaded
-  # OTP app, not just the host) — no esbuild/asset pipeline needed for two
-  # prebuilt, vendored files (see DECISIONS.md entry 61).
   plug Plug.Static, at: "/assets", from: {:phoenix, "priv/static"}, only: ~w(phoenix.js)
 
   plug Plug.Static,
