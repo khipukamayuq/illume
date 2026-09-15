@@ -12,7 +12,7 @@ defmodule Illume.QA do
   """
 
   @spec ask(Path.t(), String.t(), Illume.Tools.backend(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
+          {:ok, String.t()} | {:error, String.t()}
   def ask(target_dir, question, backend, opts \\ []) do
     child_spec =
       Supervisor.child_spec(
@@ -20,7 +20,9 @@ defmodule Illume.QA do
         restart: :temporary
       )
 
-    {:ok, pid} = DynamicSupervisor.start_child(Illume.AgentSupervisor, child_spec)
-    Illume.Agent.ask(pid, question)
+    case DynamicSupervisor.start_child(Illume.AgentSupervisor, child_spec) do
+      {:ok, pid} -> Illume.Agent.ask(pid, question)
+      {:error, reason} -> {:error, "could not start agent: #{inspect(reason)}"}
+    end
   end
 end

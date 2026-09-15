@@ -58,8 +58,9 @@ defmodule Illume.MCPServer do
     %{frame | tools: Map.put(frame.tools, name, tool)}
   end
 
+  @doc false
   @spec to_content_string(term()) :: String.t()
-  defp to_content_string(result) when is_binary(result), do: result
-  defp to_content_string(result) when is_list(result), do: Enum.join(result, "\n")
-  defp to_content_string(result), do: inspect(result)
+  def to_content_string(result) when is_binary(result), do: result
+  def to_content_string(result) when is_list(result), do: Enum.join(result, "\n")
+  def to_content_string(result), do: inspect(result)
 end

@@ -53,11 +53,17 @@ defmodule Illume.MCPServerTest do
         case expected do
           {:ok, result} ->
             refute response.isError
-            assert response.content == [%{"type" => "text", "text" => to_expected_string(result)}]
+
+            assert response.content == [
+                     %{"type" => "text", "text" => MCPServer.to_content_string(result)}
+                   ]
 
           {:error, reason} ->
             assert response.isError
-            assert response.content == [%{"type" => "text", "text" => to_expected_string(reason)}]
+
+            assert response.content == [
+                     %{"type" => "text", "text" => MCPServer.to_content_string(reason)}
+                   ]
         end
       end
     end
@@ -140,8 +146,4 @@ defmodule Illume.MCPServerTest do
       refute File.exists?("/tmp/illume-mcp-server-test")
     end
   end
-
-  defp to_expected_string(result) when is_binary(result), do: result
-  defp to_expected_string(result) when is_list(result), do: Enum.join(result, "\n")
-  defp to_expected_string(result), do: inspect(result)
 end
