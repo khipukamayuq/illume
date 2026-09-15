@@ -1,5 +1,8 @@
 defmodule Illume.CLITest do
-  use ExUnit.Case, async: true
+  # async: false — `validate/1`'s tests mutate the global `ANTHROPIC_API_KEY`
+  # env var, which isn't scoped per test process the way Mox expectations
+  # are; running concurrently with anything else that touches it would race.
+  use ExUnit.Case, async: false
 
   alias Illume.CLI
 
