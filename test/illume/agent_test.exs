@@ -139,11 +139,9 @@ defmodule Illume.AgentTest do
     assert Process.alive?(pid)
   end
 
-  test "a crashing tool is recovered as an error tool_result, not an agent crash", %{
-    tmp_dir: tmp_dir
-  } do
+  test "a crashing tool is recovered as an error tool_result, not an agent crash" do
     expect(ClientMock, :create, fn _params ->
-      tool_use_response("read_file", %{"path" => nil})
+      tool_use_response("read_file", %{"path" => "file.txt"})
     end)
 
     expect(ClientMock, :create, fn params ->
@@ -155,7 +153,14 @@ defmodule Illume.AgentTest do
       text_response("Recovered from the crash.")
     end)
 
-    pid = start_agent(target_dir: tmp_dir)
+    # `target_dir` (never model-supplied — a trusted internal value,
+    # unlike the tool `input` map) is deliberately broken here to force
+    # a genuine crash and prove `Illume.Tools.Runner`'s recovery still
+    # works. `Illume.Tools.validate_input/3`'s type guards (DECISIONS.md
+    # entry 65) now reject every malformed *tool input* before it can
+    # reach `Path.expand/2` — this test used to (accidentally) rely on
+    # `%{"path" => nil}` for that, which those guards now close.
+    pid = start_agent(target_dir: 123)
 
     assert {:ok, "Recovered from the crash."} = Agent.ask(pid, "read a bad path")
     assert Process.alive?(pid)
