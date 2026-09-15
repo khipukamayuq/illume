@@ -39,7 +39,7 @@ defmodule Illume.QuestionLiveTest do
     {:ok, view, _html} = live_isolated(conn, QuestionLive)
     render_submit(view, "ask", %{"question" => "what is the answer?"})
 
-    assert wait_for(fn -> render(view) =~ "42" end)
+    assert render_async(view) =~ "42"
     refute render(view) =~ "Thinking"
   end
 
@@ -55,10 +55,10 @@ defmodule Illume.QuestionLiveTest do
     {:ok, view, _html} = live_isolated(conn, QuestionLive)
     render_submit(view, "ask", %{"question" => "slow?"})
 
-    assert_receive :model_called, 100
-    assert wait_for(fn -> render(view) =~ "Calling the model" end)
+    assert_receive :model_called, 500
+    assert render(view) =~ "Calling the model"
 
-    assert wait_for(fn -> render(view) =~ "slow answer" end)
+    assert render_async(view, 500) =~ "slow answer"
     assert Process.alive?(view.pid)
   end
 
@@ -68,7 +68,7 @@ defmodule Illume.QuestionLiveTest do
     {:ok, view, _html} = live_isolated(conn, QuestionLive)
     render_submit(view, "ask", %{"question" => "will this fail?"})
 
-    assert wait_for(fn -> render(view) =~ "model call timed out" end)
+    assert render_async(view) =~ "model call timed out"
     assert Process.alive?(view.pid)
   end
 
@@ -109,7 +109,7 @@ defmodule Illume.QuestionLiveTest do
       # short-circuit before ever starting a second async task.
       render_submit(view, "ask", %{"question" => "second?"})
 
-      assert wait_for(fn -> render(view) =~ "first answer" end)
+      assert render_async(view, 500) =~ "first answer"
     end
 
     test "an empty question does not call Illume.QA.ask/4", %{conn: conn} do
@@ -169,18 +169,6 @@ defmodule Illume.QuestionLiveTest do
       render_submit(view, "ask", %{"question" => "hello?"})
 
       refute render(view) =~ "Thinking"
-    end
-  end
-
-  defp wait_for(fun, retries \\ 20)
-  defp wait_for(_fun, 0), do: false
-
-  defp wait_for(fun, retries) do
-    if fun.() do
-      true
-    else
-      Process.sleep(25)
-      wait_for(fun, retries - 1)
     end
   end
 end
