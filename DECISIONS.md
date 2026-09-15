@@ -1029,6 +1029,24 @@ the assertion was weak. Tightened to `{:error, ":boom"}` — `:boom` isn't
 than calling it reflectively) falls through to its catch-all `inspect/1`
 clause, pinning down which branch actually ran.
 
+### 67. Deleted `async_spike_test.exs`
+**Date:** 2026-09-14 · **Status:** Done
+The review flagged two real issues with this file: it cost 6.5s of
+`Process.sleep` on every default `mix test` run, and it risked a
+named-process collision (`Illume.Endpoint`/`Illume.PubSub`) against
+`question_live_test.exs`, since both start the same named processes
+independently. Confirmed with the user (delete, over the
+tag-`:slow`-and-exclude alternative) before removing it — its two
+findings (a raising async fun delivers `{:exit, reason}` without
+crashing the LiveView; no built-in `start_async` timeout) are already
+fully captured in DECISIONS.md entries 55-56 in enough detail to
+reconstruct an equivalent spike from scratch if a future
+`phoenix_live_view` upgrade ever warrants re-verifying either claim, and
+`question_live_test.exs`'s own "slow call" test already covers the real
+`QuestionLive` module's behavior under a slow mocked call, using the
+real endpoint (now that Phase 1 landed) rather than a throwaway
+`SpikeLive`.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
