@@ -349,4 +349,42 @@ defmodule Illume.AgentTest do
     assert {:ok, "done"} = Agent.ask(pid, "read a slow file")
     assert Process.alive?(pid)
   end
+
+  # `[:tool_call, ...]` telemetry is emitted from inside `run_tool/2`, which
+  # runs in a `Task.Supervisor.async_stream_nolink` child process — a
+  # process-dictionary-based `request_id` shipped once and never actually
+  # reached these events (the BEAM doesn't inherit a spawning process's
+  # dictionary), which a hand-built-socket/hand-built-metadata test can't
+  # catch. Drives a real agent through a real tool dispatch to exercise
+  # that boundary for real (see DECISIONS.md).
+  test "tool_call telemetry events carry the request_id passed to start_link", %{
+    tmp_dir: tmp_dir
+  } do
+    test_pid = self()
+    request_id = make_ref()
+    handler_id = {__MODULE__, self()}
+
+    :telemetry.attach(
+      handler_id,
+      [:illume, :tool_call, :start],
+      fn _event, _measurements, metadata, _config ->
+        send(test_pid, {:tool_call_metadata, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    expect(ClientMock, :create, fn _params ->
+      tool_use_response("search_files", %{"pattern" => "*.ex"})
+    end)
+
+    expect(ClientMock, :create, fn _params -> text_response("done") end)
+
+    pid = start_agent(target_dir: tmp_dir, request_id: request_id)
+
+    assert {:ok, "done"} = Agent.ask(pid, "search")
+    assert_receive {:tool_call_metadata, metadata}
+    assert metadata.request_id == request_id
+  end
 end

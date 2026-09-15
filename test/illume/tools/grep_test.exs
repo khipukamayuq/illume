@@ -51,4 +51,26 @@ defmodule Illume.Tools.GrepTest do
 
     assert message =~ "escapes target directory"
   end
+
+  # A regression this exact tool shipped: `grep -r` never followed a
+  # symlinked file named only by its recursive directory walk, but this
+  # module passes each `FileDiscovery`-listed file to `grep` as an explicit
+  # argument, and `grep` *does* follow a symlink named directly. A
+  # git-tracked symlink pointing outside the target dir leaked its content
+  # until `FileDiscovery.list/1` started confinement-checking its git-path
+  # results too (see DECISIONS.md).
+  test "does not follow a tracked symlink pointing outside the target dir", %{tmp_dir: tmp_dir} do
+    outside_dir =
+      Path.join(System.tmp_dir!(), "illume_grep_test_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(outside_dir)
+    File.write!(Path.join(outside_dir, "secret.ex"), "def needle, do: :top_secret")
+    on_exit(fn -> File.rm_rf!(outside_dir) end)
+
+    System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    File.ln_s!(Path.join(outside_dir, "secret.ex"), Path.join(tmp_dir, "innocuous.ex"))
+    System.cmd("git", ["add", "innocuous.ex"], cd: tmp_dir)
+
+    assert Grep.grep_content(tmp_dir, %{"pattern" => "needle"}) == {:ok, "no matches"}
+  end
 end

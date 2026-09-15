@@ -11,10 +11,15 @@ defmodule Illume.Tools.FileDiscovery do
 
   Paths are returned relative to `dir`. The git path is NUL-delimited
   (`git ls-files -z`), so filenames containing newlines are handled
-  correctly; the fallback walk is confinement-checked the same way
-  `Illume.Tools.PathConfinement` guards every other path in this project,
-  since `Path.wildcard/2`'s `**` — unlike git or `grep -r`'s own default
-  — does follow symlinked directories.
+  correctly; every result, from either branch, is confinement-checked the
+  same way `Illume.Tools.PathConfinement` guards every other path in this
+  project. This matters for both: `Path.wildcard/2`'s `**` follows
+  symlinked directories, and `git ls-files` lists a tracked symlink as an
+  ordinary entry regardless of what it points to — a symlink inside `dir`
+  pointing outside it would otherwise reach `Illume.Tools.Grep.grep_content/2`,
+  which (unlike `grep -r`'s own recursive walk) passes each discovered
+  path to `grep` as an explicit argument, and `grep` *does* follow a
+  symlink named directly on the command line.
 
   Falls back when `dir` isn't inside a git repo at all, and also when
   `dir` itself is gitignored by an *enclosing* repo it happens to sit
@@ -35,6 +40,7 @@ defmodule Illume.Tools.FileDiscovery do
       {:ok, files} -> files
       :not_a_git_repo -> walk(dir)
     end
+    |> Enum.filter(&PathConfinement.within?(Path.join(dir, &1), dir))
   end
 
   @spec git_tracked_files(Path.t()) :: {:ok, [String.t()]} | :not_a_git_repo
@@ -64,7 +70,7 @@ defmodule Illume.Tools.FileDiscovery do
     dir
     |> Path.join("**")
     |> Path.wildcard(match_dot: false)
-    |> Enum.filter(&(File.regular?(&1) and PathConfinement.within?(&1, dir)))
+    |> Enum.filter(&File.regular?/1)
     |> Enum.reject(&ignored?(&1, dir))
     |> Enum.map(&Path.relative_to(&1, dir))
   end

@@ -53,4 +53,25 @@ defmodule Illume.Tools.FileDiscoveryTest do
 
     refute Enum.any?(FileDiscovery.list(tmp_dir), &String.starts_with?(&1, "escape"))
   end
+
+  # `git ls-files` lists a tracked symlink as an ordinary entry regardless of
+  # what it points to — this is the actual bug this test guards (a real
+  # confinement bypass shipped and was caught by an independent security
+  # review, not by this test suite; see DECISIONS.md).
+  test "the git-aware path rejects a tracked symlink pointing outside the target dir", %{
+    tmp_dir: tmp_dir
+  } do
+    outside_dir =
+      Path.join(System.tmp_dir!(), "illume_fd_test_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(outside_dir)
+    File.write!(Path.join(outside_dir, "secret.ex"), "top secret")
+    on_exit(fn -> File.rm_rf!(outside_dir) end)
+
+    System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    File.ln_s!(Path.join(outside_dir, "secret.ex"), Path.join(tmp_dir, "innocuous.ex"))
+    System.cmd("git", ["add", "innocuous.ex"], cd: tmp_dir)
+
+    refute "innocuous.ex" in FileDiscovery.list(tmp_dir)
+  end
 end
