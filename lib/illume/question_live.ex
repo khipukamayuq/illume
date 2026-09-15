@@ -13,10 +13,11 @@ defmodule Illume.QuestionLive do
   empty, over 4000 bytes, or not a string (DECISIONS.md entries 63, 65),
   and requires the bearer token `mix illume.server` prints in its startup
   URL (checked in both `mount/3` and `handle_event/3`, DECISIONS.md entry
-  64). The status line reflects `:telemetry` events from every in-flight
-  agent, not just this connection's own, while `asking?` — a known,
-  documented gap (see DECISIONS.md's Known Gaps entry on the telemetry
-  cross-session leak), not something the `asking?` check closes.
+  64). `:telemetry` events aren't scoped to a request on their own — every
+  connection's handler receives every in-flight agent's events — so each
+  `ask` generates a fresh `request_id` (`Illume.Agent`'s own `:request_id`
+  opt), and `handle_info/2` only reacts to an event carrying this
+  connection's *current* one, not just any event while `asking?` is true.
   """
 
   use Phoenix.LiveView
@@ -47,7 +48,8 @@ defmodule Illume.QuestionLive do
        asking?: false,
        status_line: nil,
        telemetry_handler_id: handler_id,
-       authorized?: authorized?
+       authorized?: authorized?,
+       current_request_id: nil
      )}
   end
 
@@ -132,11 +134,18 @@ defmodule Illume.QuestionLive do
          byte_size(trimmed) > @max_question_bytes do
       {:noreply, socket}
     else
-      opts = qa_opts()
+      request_id = make_ref()
+      opts = [request_id: request_id] ++ qa_opts()
 
       socket =
         socket
-        |> assign(question: trimmed, answer: nil, asking?: true, status_line: "Thinking…")
+        |> assign(
+          question: trimmed,
+          answer: nil,
+          asking?: true,
+          status_line: "Thinking…",
+          current_request_id: request_id
+        )
         |> start_async(:ask, fn -> Illume.QA.ask(@target_dir, trimmed, :direct, opts) end)
 
       {:noreply, socket}
@@ -178,7 +187,7 @@ defmodule Illume.QuestionLive do
 
   @impl true
   def handle_info({:illume_telemetry, event, _measurements, metadata}, socket) do
-    if socket.assigns.asking? do
+    if socket.assigns.asking? and metadata[:request_id] == socket.assigns.current_request_id do
       {:noreply, assign(socket, status_line: status_line_for(event, metadata))}
     else
       {:noreply, socket}

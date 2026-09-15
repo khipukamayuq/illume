@@ -13,6 +13,15 @@ defmodule Illume.Agent do
   `messages` is kept most-recent-first internally (prepending is O(1),
   unlike appending to the end of a list) and reversed into chronological
   order only when actually sent to the model in `call_model/1`.
+
+  An optional `:request_id` opt (any term, opaque to this module) is
+  stashed in the process dictionary at `init/1` and stamped onto every
+  `:telemetry` event's metadata by the shared `telemetry/2` helper —
+  `:telemetry` itself has no per-caller scoping, so this is what lets a
+  consumer with several concurrent agents in flight (`Illume.QuestionLive`)
+  tell its own agent's events apart from another connection's, the same
+  way `Logger.metadata/1` attaches process-local context without
+  threading it through every call site.
   """
 
   use GenServer
@@ -71,6 +80,7 @@ defmodule Illume.Agent do
   @impl true
   def init(opts) do
     target_dir = Keyword.fetch!(opts, :target_dir)
+    Process.put(:illume_request_id, Keyword.get(opts, :request_id))
 
     state = %__MODULE__{
       target_dir: target_dir,
@@ -276,6 +286,7 @@ defmodule Illume.Agent do
 
   @spec telemetry([atom()], map()) :: :ok
   defp telemetry(event_suffix, metadata) do
+    metadata = Map.put(metadata, :request_id, Process.get(:illume_request_id))
     :telemetry.execute([:illume | event_suffix], %{system_time: System.system_time()}, metadata)
   end
 end
