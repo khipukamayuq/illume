@@ -64,6 +64,30 @@ defmodule Illume.ToolsTest do
 
       assert message =~ "invalid revision"
     end
+
+    test "read_file's path is rejected up front if it isn't a string" do
+      assert {:error, message} = Tools.dispatch("read_file", %{"path" => 123}, File.cwd!())
+      assert message =~ "invalid path"
+    end
+
+    test "search_files' and grep_content's pattern are rejected up front if not a string" do
+      assert {:error, message} =
+               Tools.dispatch("search_files", %{"pattern" => ["*.ex"]}, File.cwd!())
+
+      assert message =~ "invalid pattern"
+
+      assert {:error, message} =
+               Tools.dispatch("grep_content", %{"pattern" => %{}}, File.cwd!())
+
+      assert message =~ "invalid pattern"
+    end
+
+    test "grep_content's optional path is rejected up front if present and not a string" do
+      assert {:error, message} =
+               Tools.dispatch("grep_content", %{"pattern" => "foo", "path" => nil}, File.cwd!())
+
+      assert message =~ "invalid path"
+    end
   end
 
   describe "specs/0" do

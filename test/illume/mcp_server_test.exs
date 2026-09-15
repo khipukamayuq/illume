@@ -87,6 +87,45 @@ defmodule Illume.MCPServerTest do
       assert response.isError
     end
 
+    test "a non-string read_file path is rejected instead of crashing the session", %{
+      frame: frame,
+      target_dir: target_dir
+    } do
+      params = %{"path" => 123}
+      expected = Illume.Tools.dispatch("read_file", params, target_dir, :direct)
+      {:reply, response, ^frame} = MCPServer.handle_tool_call("read_file", params, frame)
+
+      assert {:error, message} = expected
+      assert message =~ "invalid path"
+      assert response.isError
+    end
+
+    test "a non-string search_files pattern is rejected instead of crashing the session", %{
+      frame: frame,
+      target_dir: target_dir
+    } do
+      params = %{"pattern" => ["*.ex"]}
+      expected = Illume.Tools.dispatch("search_files", params, target_dir, :direct)
+      {:reply, response, ^frame} = MCPServer.handle_tool_call("search_files", params, frame)
+
+      assert {:error, message} = expected
+      assert message =~ "invalid pattern"
+      assert response.isError
+    end
+
+    test "a non-string grep_content pattern is rejected instead of crashing the session", %{
+      frame: frame,
+      target_dir: target_dir
+    } do
+      params = %{"pattern" => %{"nested" => "map"}}
+      expected = Illume.Tools.dispatch("grep_content", params, target_dir, :direct)
+      {:reply, response, ^frame} = MCPServer.handle_tool_call("grep_content", params, frame)
+
+      assert {:error, message} = expected
+      assert message =~ "invalid pattern"
+      assert response.isError
+    end
+
     test "a flag-injecting git_show revision is rejected the same as a direct dispatch/4 call", %{
       frame: frame,
       target_dir: target_dir

@@ -62,11 +62,28 @@ defmodule Illume.Tools do
   end
 
   @spec validate_input(String.t(), map(), Path.t()) :: :ok | {:error, String.t()}
-  defp validate_input("read_file", %{"path" => path}, target_dir) do
+  defp validate_input("read_file", %{"path" => path}, target_dir) when is_binary(path) do
     case PathConfinement.confine(target_dir, path) do
       {:ok, _full_path} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp validate_input("read_file", %{"path" => path}, _target_dir) do
+    {:error, "invalid path: #{inspect(path)}"}
+  end
+
+  defp validate_input(name, %{"pattern" => pattern}, _target_dir)
+       when name in ["search_files", "grep_content"] and not is_binary(pattern) do
+    {:error, "invalid pattern: #{inspect(pattern)}"}
+  end
+
+  # `grep_content`'s `path` (unlike `read_file`'s) is optional — only
+  # guard it when present and wrong-typed; a missing `path` legitimately
+  # means "search the whole target dir" (`Illume.Tools.Grep.grep_content/2`'s
+  # own default).
+  defp validate_input("grep_content", %{"path" => path}, _target_dir) when not is_binary(path) do
+    {:error, "invalid path: #{inspect(path)}"}
   end
 
   defp validate_input("git_show", %{"revision" => revision}, _target_dir)

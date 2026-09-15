@@ -975,6 +975,47 @@ Two implementation details worth recording:
    the billing-relevant path (`handle_event/3`) is independently guarded
    either way.
 
+### 65. Type guards for malformed MCP client input (review finding L1)
+**Date:** 2026-09-14 · **Status:** Done
+The review's L1 finding: an external MCP client (any process able to
+speak the stdio protocol to `--serve`, not necessarily one this codebase
+controls) could send a non-`String.t()` `path`/`pattern` — e.g.
+`%{"path" => 123}` — which would previously reach
+`PathConfinement.confine/2`'s `Path.expand/2` (for `read_file`) or the
+glob/grep matchers (for `search_files`/`grep_content`) unguarded,
+crashing that MCP session (a self-inflicted DoS on the caller's own
+tool). Extended `Illume.Tools.validate_input/3` with clauses for both,
+following the exact shape the existing `git_show` revision-type guard
+already established in the same function: a `when is_binary(...)` guard
+on the existing valid-input clause, plus an explicit fallback clause
+returning `{:error, "invalid ..."}` for anything else — not a
+`try/rescue` in `handle_tool_call/3`, per this pass's own technical
+decision to keep validation in the one place `Illume.Tools`' moduledoc
+already designates for it. Tested at both the `Illume.Tools.dispatch/4`
+level (`tools_test.exs`, mirroring `git_show`'s existing non-string
+test) and through `Illume.MCPServer.handle_tool_call/3`
+(`mcp_server_test.exs`, mirroring the existing path-escaping/revision-
+injection tests) — the latter proves the error is a clean `{:error, _}`
+result at the actual MCP response layer, not an unhandled crash.
+
+Went one field further than the plan's own enumeration while
+implementing: `grep_content`'s *optional* `path` (a subdirectory scope,
+distinct from `pattern`) had the identical unguarded
+`PathConfinement.confine/2` crash — `%{"pattern" => "x", "path" => nil}`
+crashed exactly like the two guarded fields. Same vulnerability class the
+review flagged, one extra clause to close it (guarded only when present,
+since a missing `path` is a legitimate "search everything" default).
+
+Fixing this closed off `agent_test.exs`'s "a crashing tool is recovered
+as an error tool_result, not an agent crash" test's own crash trigger
+(`%{"path" => nil}` on `read_file`) — it had relied on exactly the bug
+this entry fixes. Repointed that test at a crash source outside the
+now-guarded `input` map entirely: an invalid `target_dir` (never
+model-supplied, so never in scope for `validate_input/3`), which still
+reaches `Path.expand/1` unguarded and raises. Confirms the generic
+crash-recovery plumbing (`Illume.Tools.Runner`) still works, independent
+of which specific tool-input bugs do or don't currently exist.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
