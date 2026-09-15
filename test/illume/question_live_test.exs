@@ -179,6 +179,18 @@ defmodule Illume.QuestionLiveTest do
 
       refute render(view) =~ "Thinking"
     end
+
+    # A non-string `question` can only arrive via a raw socket frame — the
+    # real `<input>` always submits a string — so this is exercised as a
+    # plain function call, mirroring `handle_async/3`'s `{:exit, reason}`
+    # test above rather than driving it through `render_submit/3`.
+    test "a non-binary question does not crash the session" do
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, authorized?: true, asking?: false, question: ""}
+      }
+
+      assert {:noreply, ^socket} = QuestionLive.handle_event("ask", %{"question" => 123}, socket)
+    end
   end
 
   describe "bearer-token auth (P2-T3)" do

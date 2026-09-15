@@ -11,6 +11,8 @@ defmodule Illume.QuestionLive do
 
   use Phoenix.LiveView
 
+  require Logger
+
   alias Phoenix.LiveView.Socket
 
   @target_dir Path.expand("../..", __DIR__)
@@ -126,7 +128,7 @@ defmodule Illume.QuestionLive do
   end
 
   @impl true
-  def handle_event("ask", %{"question" => question}, socket) do
+  def handle_event("ask", %{"question" => question}, socket) when is_binary(question) do
     trimmed = String.trim(question)
 
     if not socket.assigns.authorized? or socket.assigns.asking? or trimmed == "" or
@@ -143,6 +145,14 @@ defmodule Illume.QuestionLive do
       {:noreply, socket}
     end
   end
+
+  # A non-string (or missing) `question` can only come from a raw socket
+  # frame, never the real form (its `<input>` always submits a string) —
+  # `String.trim/1` below would otherwise raise `FunctionClauseError` and
+  # crash this session, the same input-validation class this pass already
+  # closed at the MCP boundary (`Illume.Tools.validate_input/3`, DECISIONS.md
+  # entry 65).
+  def handle_event("ask", _params, socket), do: {:noreply, socket}
 
   # Test-only seam, same shape as `Illume.Tools.MCP.client_adapter/0`: lets
   # tests inject a mocked `Illume.LLM.Client` without threading a new
@@ -162,6 +172,7 @@ defmodule Illume.QuestionLive do
   end
 
   def handle_async(:ask, {:ok, {:error, reason}}, socket) do
+    Logger.warning("Illume.QA.ask/4 returned an error: #{reason}")
     {:noreply, assign(socket, answer: reason, asking?: false, status_line: nil)}
   end
 
@@ -175,10 +186,12 @@ defmodule Illume.QuestionLive do
   end
 
   # `:telemetry` events aren't scoped to a request — every LiveView
-  # connection's handler receives every agent's events. Only apply one
-  # while *this* connection is actually waiting on an answer, or an
-  # unrelated question (another tab, another user) would flash a stray
-  # status line here.
+  # connection's handler receives every agent's events. This guard only
+  # suppresses display while *this* connection is idle (`asking?` false);
+  # while it's actually waiting on an answer, another session's in-flight
+  # `tool_call` names still surface here — a real, documented, deliberately
+  # deferred gap, not one this guard closes (see DECISIONS.md's Known Gaps
+  # entry on the telemetry cross-session leak).
   @impl true
   def handle_info({:illume_telemetry, event, _measurements, metadata}, socket) do
     if socket.assigns.asking? do
