@@ -1195,6 +1195,17 @@ code:
   `Illume.AgentSupervisor` target) was judged not "easy to simulate,"
   which the plan's own task description allowed skipping.
 
+### 72. SIGINT documentation symmetry for `mix illume.server`
+**Date:** 2026-09-14 · **Status:** Done
+`Illume.CLI`'s moduledoc already documents that Elixir can't trap
+`:sigint` (entry 41), so Ctrl-C during `--mcp`/`--serve` just kills the
+BEAM without running `terminate/2` cleanup. The same is true of `mix
+illume.server` (its `Process.sleep(:infinity)` main loop has no signal
+handling either), but nothing said so. Added the matching one-line note
+to `Mix.Tasks.Illume.Server`'s own moduledoc — a doc-only change, the
+underlying limitation was already real and already applied here, just
+unstated.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
