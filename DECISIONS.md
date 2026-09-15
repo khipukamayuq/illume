@@ -1016,6 +1016,19 @@ reaches `Path.expand/1` unguarded and raises. Confirms the generic
 crash-recovery plumbing (`Illume.Tools.Runner`) still works, independent
 of which specific tool-input bugs do or don't currently exist.
 
+### 66. Tightened `qa_test.exs`'s weak error-path assertion
+**Date:** 2026-09-14 · **Status:** Done
+The review's Testing Critical finding: "returns an :error result unchanged
+when the model call fails" only asserted `{:error, _reason}` — it would
+pass even if `Illume.QA.ask/4` returned the wrong formatted string, or
+the wrong error entirely, as long as the shape was `{:error, _}`. The
+mock already returned a specific, recognizable `{:error, :boom}`; only
+the assertion was weak. Tightened to `{:error, ":boom"}` — `:boom` isn't
+`:timeout` or `{:crashed, _}` or an exception, so `Illume.Agent`'s
+`format_error/1` (private, so asserted by literal expected value rather
+than calling it reflectively) falls through to its catch-all `inspect/1`
+clause, pinning down which branch actually ran.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
