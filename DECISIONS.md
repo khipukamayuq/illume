@@ -473,6 +473,26 @@ them, either fixed or explicitly documented as deferred.
   `handle_async/3`'s `{:exit, reason}` case), which also let both the
   matching and mismatched cases be asserted precisely, something the old
   fire-at-a-real-view test couldn't do at all.
+- The same focused security review also flagged (and this fixed) a
+  third issue in `grep_content`'s move to an explicit file list: passing
+  a directory for `grep -r` to walk lets it silently skip anything it
+  can't process (a broken symlink, a submodule path, a file deleted
+  between listing and reading); passing that same file as an explicit
+  argument does not — `grep` exits `2` for it, and `run_batches/2`
+  treated any non-{0,1} exit as fatal, discarding the *entire* search's
+  results, including real matches already found in the same batch.
+  Reproduced directly: one broken symlink (not contrived — a common,
+  non-malicious occurrence, e.g. an uninitialized submodule checkout or
+  a stale build artifact) made `grep_content` unusable for the whole
+  `target_dir`. Fixed by adding `-s` (suppress grep's own per-file error
+  messages, which `stderr_to_stdout: true` would otherwise fold into
+  what the model sees as match content) and treating exit `2` as a
+  partial result rather than a hard failure, the same as exit `1`
+  (no matches) — merging whatever real output is present instead of
+  discarding it. Verified the new tests actually catch the regression
+  by reverting the fix and confirming they fail, then restoring it,
+  matching this project's established practice for every other
+  behavioral fix in this log.
 
 ## Known gaps (deliberately deferred, not silently skipped)
 
