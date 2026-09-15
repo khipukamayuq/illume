@@ -1,4 +1,7 @@
-ExUnit.start()
+# `:e2e` spawns our own compiled escript as a real OS subprocess over real
+# stdio (see mcp_server_e2e_test.exs) — excluded from the default `mix test`
+# run; opt in with `mix test --only e2e` (see DECISIONS.md entry 51).
+ExUnit.start(exclude: [:e2e])
 
 Mox.defmock(Illume.LLM.ClientMock, for: Illume.LLM.Client)
 Mox.defmock(Illume.Tools.MCP.ClientMock, for: Illume.Tools.MCP.Client)

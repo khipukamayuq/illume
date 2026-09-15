@@ -9,7 +9,8 @@ defmodule Illume.Application do
     children = [
       {Task.Supervisor, name: Illume.ToolSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: Illume.AgentSupervisor},
-      {DynamicSupervisor, strategy: :one_for_one, name: Illume.MCPSupervisor}
+      {DynamicSupervisor, strategy: :one_for_one, name: Illume.MCPSupervisor},
+      {DynamicSupervisor, strategy: :one_for_one, name: Illume.MCPServerSupervisor}
     ]
 
     opts = [strategy: :one_for_one, name: Illume.Supervisor]
