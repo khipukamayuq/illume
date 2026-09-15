@@ -379,6 +379,12 @@ them, either fixed or explicitly documented as deferred.
   documentation note on an `inspect/1` fallback's assumptions, and a
   misleading in-code comment reworded to match what `DECISIONS.md`
   already said correctly about the telemetry cross-session leak.
+- `test/illume/cli_test.exs`'s `validate/1` tests mutated the global
+  `ANTHROPIC_API_KEY` env var under `async: true` — a latent cross-test
+  race (no other test file happened to touch that var, so nothing
+  collided in practice, but the hazard was real). Fixed by moving the
+  whole module to `async: false`; a one-line change not worth leaving
+  deferred once actually looked at.
 
 ## Known gaps (deliberately deferred, not silently skipped)
 
@@ -397,10 +403,6 @@ them, either fixed or explicitly documented as deferred.
   mitigated (the escript exits cleanly instead of hanging) but not fixed
   — the underlying restart storm still happens on every client
   disconnect. Filing this upstream is future work.
-- `test/illume/cli_test.exs`'s `validate/1` tests run `async: true` while
-  mutating the global `ANTHROPIC_API_KEY` env var — a real cross-test
-  race risk, predates the web-UI/MCP-server work, flagged by review but
-  out of scope for a branch-specific pass.
 - The global `:telemetry` handler `QuestionLive.mount/3` attaches leaks
   other sessions' tool *names* (never paths/content) across concurrent
   LiveView connections — the `asking?` guard stops an unrelated event
