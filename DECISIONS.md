@@ -1166,6 +1166,35 @@ Tool-registration correctness itself was already covered directly by
 starting it under the real supervisor work at all" gap, in a new
 `test/illume/mcp_server_boot_test.exs`.
 
+### 71. Code-quality cleanups: de-duplicated `to_content_string/1`, tightened `Illume.QA.ask/4`'s spec, fixed its bare supervisor match
+**Date:** 2026-09-14 · **Status:** Done
+Three small review findings, same commit since none touch overlapping
+code:
+
+- `Illume.MCPServer.to_content_string/1` was `defp`, so
+  `mcp_server_test.exs` maintained a byte-for-byte copy
+  (`to_expected_string/1`) just to compute the expected value. Made it
+  `@doc false` and public; the test now calls it directly. Two
+  implementations of the same three-clause function drifting apart
+  silently was the actual risk, not just duplication for its own sake.
+- `Illume.QA.ask/4`'s `@spec` said `{:error, term()}`; the real
+  invariant (`Illume.Agent` always formats errors to strings before
+  replying, relied upon by `Illume.QuestionLive` already) is now
+  visible to Dialyzer as `{:error, String.t()}`. `Illume.Agent.ask/2`'s
+  own spec still says `{:error, term()}` — left as-is (out of this
+  task's stated scope, and Dialyzer's success typing doesn't flag the
+  narrowing as unsound since `String.t()` is a subtype of `term()`).
+- `Illume.QA.ask/4`'s bare `{:ok, pid} = DynamicSupervisor.start_child(...)`
+  now goes through a `case`, surfacing `{:error, "could not start agent:
+  ..."}` through the function's own advertised contract instead of
+  crashing with an unhandled `MatchError` on the rare case the
+  supervisor itself refuses (e.g. `Illume.AgentSupervisor`'s
+  `max_children: 20`, entry 63, actually triggering). No test added for
+  this specific path — forcing 20 concurrent in-flight agents (or
+  otherwise substituting a test-scoped supervisor for the hardcoded
+  `Illume.AgentSupervisor` target) was judged not "easy to simulate,"
+  which the plan's own task description allowed skipping.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
