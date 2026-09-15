@@ -13,6 +13,18 @@ defmodule Illume.Tools.GrepTest do
     assert output =~ "needle"
   end
 
+  test "respects the target dir's own .gitignore when it's a git repo", %{tmp_dir: tmp_dir} do
+    System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    File.write!(Path.join(tmp_dir, ".gitignore"), "ignored_dir/\n")
+    File.mkdir_p!(Path.join(tmp_dir, "ignored_dir"))
+    File.write!(Path.join(tmp_dir, "ignored_dir/noise.ex"), "def needle, do: :ok")
+    File.write!(Path.join(tmp_dir, "real.ex"), "def needle, do: :ok")
+
+    assert {:ok, output} = Grep.grep_content(tmp_dir, %{"pattern" => "needle"})
+    assert output =~ "real.ex"
+    refute output =~ "ignored_dir"
+  end
+
   test "reports no matches without treating it as an error", %{tmp_dir: tmp_dir} do
     File.write!(Path.join(tmp_dir, "foo.ex"), "nothing interesting here")
     assert Grep.grep_content(tmp_dir, %{"pattern" => "needle"}) == {:ok, "no matches"}

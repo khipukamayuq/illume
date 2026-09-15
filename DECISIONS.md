@@ -385,12 +385,29 @@ them, either fixed or explicitly documented as deferred.
   collided in practice, but the hazard was real). Fixed by moving the
   whole module to `async: false`; a one-line change not worth leaving
   deferred once actually looked at.
+- `search_files`/`grep_content` used to filter noise via a small
+  hardcoded directory list (`.git`, `_build`, `deps`, `node_modules`,
+  etc.), which could never be exhaustive across languages/tools. Added
+  `Illume.Tools.FileDiscovery`, shared by both: when `target_dir` is a
+  git repo, enumerates files via `git ls-files --cached --others
+  --exclude-standard`, so a target project's own `.gitignore` is
+  respected instead of a generic guess; falls back to the old
+  walk-and-skip-a-static-list approach otherwise (still
+  confinement-checked, since `Path.wildcard/2`'s `**` — unlike git or
+  `grep -r`'s own default — follows symlinked directories). Also had to
+  guard against a subtler case: `git -C dir ls-files` inherits an
+  *enclosing* repo's ignore rules for the path to `dir`, not just paths
+  under it, which silently returned empty for any `target_dir` that
+  itself sits inside a gitignored path of a larger repo (hit immediately
+  by ExUnit's own `tmp_dir` fixtures, which live under this project's
+  own gitignored `tmp/`) — checked explicitly with `git check-ignore`
+  rather than trusting that empty result. `grep_content` also moved from
+  letting `grep -r` walk the directory itself to being handed the
+  discovered file list directly, batched (500 files per invocation) to
+  avoid one unbounded argument list on a very large target.
 
 ## Known gaps (deliberately deferred, not silently skipped)
 
-- `grep_content` can pick up non-ignored binary/cache directories — noisy
-  but grep's own binary-file detection prevents garbage output. Not
-  fixed; not asked for.
 - A `--mcp`/`mix illume.server` run interrupted with Ctrl-C doesn't run
   cleanup (spawned subprocesses for `--mcp`; no effect either way for
   `mix illume.server`) — Elixir's public API cannot trap `:sigint`;

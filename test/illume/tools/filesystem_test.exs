@@ -22,6 +22,18 @@ defmodule Illume.Tools.FilesystemTest do
     assert {:ok, ["foo.exs"]} = Filesystem.search_files(tmp_dir, %{"pattern" => "*.exs"})
   end
 
+  test "search_files respects the target dir's own .gitignore when it's a git repo", %{
+    tmp_dir: tmp_dir
+  } do
+    System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    File.write!(Path.join(tmp_dir, ".gitignore"), "ignored_dir/\n")
+    File.mkdir_p!(Path.join(tmp_dir, "ignored_dir"))
+    File.write!(Path.join(tmp_dir, "ignored_dir/noise.exs"), "")
+    File.write!(Path.join(tmp_dir, "real.exs"), "")
+
+    assert {:ok, ["real.exs"]} = Filesystem.search_files(tmp_dir, %{"pattern" => "*.exs"})
+  end
+
   test "search_files does not leak matches outside the target dir via `..` in the pattern", %{
     tmp_dir: tmp_dir
   } do
