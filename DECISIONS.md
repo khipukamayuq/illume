@@ -1206,6 +1206,16 @@ to `Mix.Tasks.Illume.Server`'s own moduledoc — a doc-only change, the
 underlying limitation was already real and already applied here, just
 unstated.
 
+### 73. Post-review triage: `handle_event("ask", ...)` type guard, plus two doc-only fixes
+**Date:** 2026-09-15 · **Status:** Done
+The `/phx:review` re-pass (`.claude/plans/mcp-server-and-web-hardening/reviews/mcp-server-and-web-hardening-review.md`) came back PASS WITH WARNINGS. One security finding it reported as a merge blocker — the bearer token being logged in plaintext — was investigated further and **disproven**: `deps/phoenix/mix.exs` ships `filter_parameters: ["password", "token"]` as `:phoenix`'s own default application environment, filtering the key with zero app-level config needed; confirmed both by reading that source line and by rerunning the test suite and observing the actual log output (`Parameters: %{"token" => "[FILTERED]"}`), not just by reading library source in isolation.
+
+One real Warning did survive: `handle_event("ask", %{"question" => question}, socket)` assumed `question` was a binary and called `String.trim/1` unconditionally — a raw socket client sending a non-string value (impossible through the real `<input>`, which always submits a string) raised `FunctionClauseError` and crashed that session. The exact bug class this same pass already closed at the MCP boundary (entry 65), left open at the web boundary this pass added. Fixed with a `when is_binary(question)` guard plus a catch-all `handle_event("ask", _params, socket), do: {:noreply, socket}` clause, tested directly (mirroring `handle_async/3`'s existing `{:exit, reason}` test style, since a non-string value can't be produced through `render_submit/3`'s form encoding).
+
+Two doc-only fixes from the review's Suggestions: reworded a comment in `handle_info/2` that implied the `asking?` guard closes the telemetry cross-session leak — it only suppresses display while this socket is idle, exactly as DECISIONS.md's own Known Gaps entry already stated correctly, so the code comment was the thing out of sync, not the documentation. And `handle_async(:ask, {:ok, {:error, reason}}, socket)` now also logs the reason via `Logger.warning/1`, in addition to (not instead of) showing it to the user — the review's suggestion to replace the user-facing text with a generic message was **not** applied as literally proposed: this is a single-user local dev tool where seeing the real error (e.g. "model call timed out") is itself the useful behavior, an existing test already asserts on that exact text, and the review's own suggestion explicitly hedged it as a "if this tool ever gets a second user" concern rather than a now-fix.
+
+Remaining Suggestions from the review (untested `start_child` failure branch, `to_content_string/1`'s `inspect/1` catch-all, committed dev/test secrets, the `:web_token`-unset-fails-open default, the `mcp_server_boot_test.exs` transport-fidelity gap, comment/DECISIONS.md ticket-ID density) are tracked in the triage file (`.claude/plans/mcp-server-and-web-hardening/reviews/mcp-server-and-web-hardening-triage.md`) and addressed in subsequent commits where a real code change was warranted.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
