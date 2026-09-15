@@ -10,6 +10,24 @@ defmodule Illume.CLI do
   either way. `--mcp` requires `npx` and `uvx` on PATH and network access on
   first run.
 
+  Pass `--serve <target_dir>` instead of a question to run Illume itself as
+  an MCP server (`Illume.MCPServer`) over stdio, exposing the same five
+  read-only tools to an external MCP client. This is a distinct axis from
+  `--mcp` (that flag is about which backend *this* process's own agent
+  loop uses; `--serve` skips the agent loop and question entirely). No
+  `ANTHROPIC_API_KEY` is required for `--serve` — no model is called.
+  `target_dir` is fixed for the process's whole lifetime via
+  `Application.put_env/3` (see DECISIONS.md entry 50). `--serve` also
+  redirects the default `:logger` handler to stderr before starting the
+  server: `anubis_mcp`'s stdio transport reads this process's raw stdout
+  as newline-delimited JSON-RPC, and Elixir's default Logger handler
+  writes to that same stdout — any log line (even a debug one from
+  `anubis_mcp` itself) corrupts the protocol stream. Found live by the
+  end-to-end smoke test, not by inspection (see DECISIONS.md entry 52).
+  `serve/1` also monitors the started server and exits (rather than
+  blocking forever) once it dies — see `await_server_exit/1` and
+  DECISIONS.md entry 53 for why that's needed.
+
   `answer/3` guarantees `Illume.Tools.MCP.stop_clients/0` runs after the
   agent finishes, on both success and error, via `try/after`. It does
   not guarantee cleanup on Ctrl-C: Elixir cannot trap `:sigint` (see
@@ -24,9 +42,11 @@ defmodule Illume.CLI do
 
   alias Illume.Tools.MCP
 
-  @doc "Parse escript argv into a target dir, question, and tool backend."
-  @spec parse_args([String.t()]) :: {:ok, Path.t(), String.t(), Illume.Tools.backend()} | :error
+  @doc "Parse escript argv into a target dir, question, and tool backend, or a `--serve` request."
+  @spec parse_args([String.t()]) ::
+          {:ok, Path.t(), String.t(), Illume.Tools.backend()} | {:serve, Path.t()} | :error
   def parse_args(["--mcp", target_dir, question]), do: {:ok, target_dir, question, :mcp}
+  def parse_args(["--serve", target_dir]), do: {:serve, target_dir}
   def parse_args([target_dir, question]), do: {:ok, target_dir, question, :direct}
   def parse_args(_argv), do: :error
 
@@ -54,8 +74,14 @@ defmodule Illume.CLI do
           {:error, message} -> fail(message)
         end
 
+      {:serve, target_dir} ->
+        case validate_target_dir(target_dir) do
+          :ok -> serve(target_dir)
+          {:error, message} -> fail(message)
+        end
+
       :error ->
-        fail("usage: illume [--mcp] <target_dir> \"<question>\"")
+        fail("usage: illume [--mcp] <target_dir> \"<question>\" | illume --serve <target_dir>")
     end
   end
 
@@ -82,15 +108,70 @@ defmodule Illume.CLI do
 
   @spec run_agent(Path.t(), String.t(), Illume.Tools.backend()) ::
           {:ok, String.t()} | {:error, term()}
-  defp run_agent(target_dir, question, backend) do
-    child_spec =
-      Supervisor.child_spec(
-        {Illume.Agent, target_dir: target_dir, tool_backend: backend},
-        restart: :temporary
+  defp run_agent(target_dir, question, backend), do: Illume.QA.ask(target_dir, question, backend)
+
+  @spec validate_target_dir(Path.t()) :: :ok | {:error, String.t()}
+  defp validate_target_dir(target_dir) do
+    if File.dir?(target_dir), do: :ok, else: {:error, "#{target_dir} is not a directory"}
+  end
+
+  @spec serve(Path.t()) :: no_return()
+  defp serve(target_dir) do
+    redirect_logger_to_stderr()
+    Application.put_env(:illume, :mcp_server_target_dir, target_dir)
+
+    case DynamicSupervisor.start_child(
+           Illume.MCPServerSupervisor,
+           {Illume.MCPServer, transport: :stdio}
+         ) do
+      {:ok, pid} -> await_server_exit(pid)
+      {:error, reason} -> fail("failed to start MCP server: #{inspect(reason)}")
+    end
+  end
+
+  # `Anubis.Server.Supervisor`'s stdio transport child is `:permanent` under
+  # a `:one_for_all` strategy, with no supported option to change either —
+  # a normal client disconnect (stdin EOF) restarts the whole session tree,
+  # which sees the same permanent EOF again immediately and typically
+  # exhausts the default restart intensity within milliseconds, crashing
+  # this supervisor (confirmed against anubis_mcp 2.0.0, the latest
+  # release, and its own issue tracker; see DECISIONS.md entry 53).
+  # `main/1`'s process has no link to that tree, so without this monitor it
+  # would sleep forever as a zombie once the server dies; this at least
+  # exits with a visible error instead.
+  @spec await_server_exit(pid()) :: no_return()
+  defp await_server_exit(pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, reason} when reason in [:normal, :shutdown] ->
+        System.halt(0)
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        fail("MCP server exited: #{inspect(reason)}")
+    end
+  end
+
+  # `:logger`'s `:default` handler can't change its `:type` (device) on a
+  # running handler — `logger_std_h` rejects that as an
+  # `:illegal_config_change` — so this removes and re-adds it, keeping every
+  # other key (formatter, filters, level) exactly as Elixir's own bootstrap
+  # set them and swapping only the device.
+  @spec redirect_logger_to_stderr() :: :ok
+  defp redirect_logger_to_stderr do
+    {:ok, handler} = :logger.get_handler_config(:default)
+    :ok = :logger.remove_handler(:default)
+
+    :ok =
+      :logger.add_handler(
+        :default,
+        handler.module,
+        handler
+        |> Map.update!(:config, &Map.put(&1, :type, :standard_error))
+        |> Map.take([:config, :level, :filter_default, :filters, :formatter])
       )
 
-    {:ok, pid} = DynamicSupervisor.start_child(Illume.AgentSupervisor, child_spec)
-    Illume.Agent.ask(pid, question)
+    :ok
   end
 
   @spec start_backend(Illume.Tools.backend(), Path.t()) :: :ok | {:error, term()}

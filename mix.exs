@@ -9,7 +9,7 @@ defmodule Illume.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       escript: [main_module: Illume.CLI],
-      dialyzer: [plt_file: {:no_warn, "priv/plts/dialyzer.plt"}]
+      dialyzer: [plt_file: {:no_warn, "priv/plts/dialyzer.plt"}, plt_add_apps: [:mix]]
     ]
   end
 
@@ -27,8 +27,14 @@ defmodule Illume.MixProject do
       {:req_anthropic, "~> 0.2"},
       {:telemetry, "~> 1.2"},
       {:mox, "~> 1.1", only: :test},
-      {:plug, "~> 1.18", only: :test},
+      {:lazy_html, ">= 0.1.0", only: :test},
+      {:plug, "~> 1.18"},
       {:anubis_mcp, "~> 2.0"},
+      {:phoenix, "~> 1.8"},
+      {:phoenix_live_view, "~> 1.2"},
+      {:phoenix_html, "~> 4.3"},
+      {:phoenix_pubsub, "~> 2.3"},
+      {:bandit, "~> 1.12"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]

@@ -525,6 +525,301 @@ named function. Each behavioral fix was reverted and re-tested to
 confirm its accompanying test actually catches the regression before
 being restored, consistent with every other fix in this pass.
 
+## MCP server (Component 1)
+
+### 49. `%Anubis.Server.Component.Tool{}` built directly, not via `Frame.register_tool/3` or the `component` macro
+**Date:** 2026-09-14 · **Status:** Fixed
+`lib/illume/mcp_server.ex`'s `init/2` builds `%Anubis.Server.Component.Tool{}`
+structs by hand from `Illume.Tools.specs()` and puts them straight into
+`frame.tools`, rather than calling `Frame.register_tool/3` or using the
+`component`/`schema do...end` DSL. Both of those paths run the input
+schema through `Component.__clean_schema_for_peri__/1`, which expects a
+Peri-DSL schema (atom-shorthand types) — not the raw Anthropic-shaped JSON
+Schema maps `Tools.specs()` already produces for the model. Using either
+would have silently produced a broken or wrong schema. Confirmed by
+reading `deps/anubis_mcp`'s actual vendored source (version 2.0.0), not
+guessed from the client API used elsewhere in this codebase.
+
+A second, more dangerous footgun found the same way:
+`Anubis.Server.Handlers.Tools.validate_params/3` has a clause
+`validate_params(_, %Tool{validate_input: nil}, _), do: {:ok, %{}}` — a
+`Tool` with `validate_input: nil` has the client's real arguments silently
+**discarded and replaced with `%{}`** before dispatch ever sees them, not
+passed through unvalidated as the field name would suggest. Every
+`%Tool{}` built here sets `validate_input: fn params -> {:ok, params} end`
+(identity pass-through) for exactly this reason — real validation is
+`Illume.Tools.dispatch/4`'s job, not this library's. `handler: nil` routes
+calls to `handle_tool_call/3` (one dispatch function for five tools,
+instead of five component modules).
+
+### 50. `target_dir` for `--serve` passed via `Application.put_env/3`, not supervisor opts
+**Date:** 2026-09-14 · **Status:** Fixed
+`Anubis.Server.Supervisor`'s own start opts (`:transport`, `:name`,
+`:registry`, etc.) don't forward arbitrary application config into a
+server's `init/2` — the only `assigns`-merging path
+(`merge_transport_assigns/2`) is fed from per-connection transport context
+(e.g. a Plug conn's assigns), not static supervisor start opts, and stdio
+has no such per-connection context at all. `Illume.CLI`'s `serve/1` sets
+`Application.put_env(:illume, :mcp_server_target_dir, target_dir)` once,
+immediately before starting `Illume.MCPServer`, and `init/2` reads it back
+with `Application.fetch_env!/2`. This is process-global config, which
+`Illume.Tools`' own moduledoc otherwise warns against for backend
+selection — but `--serve` is a one-shot, blocking CLI invocation
+(never two in the same VM), and the value is genuinely immutable for the
+process's whole lifetime, not per-call mutable state. Different situation,
+same codebase; worth the explicit call-out rather than a silent exception
+to the pattern.
+
+### 51. Component 1 test strategy: two-tier, since `StubTransport` isn't published
+**Date:** 2026-09-14 · **Status:** Fixed
+`Anubis.Server.Supervisor`'s `@type transport` includes a `StubTransport`,
+but its module is only defined under `anubis_mcp`'s own `test/support/` —
+excluded from the published hex package (confirmed: no `stub` file
+anywhere under `deps/anubis_mcp/lib`). So there's no in-process, no-real-
+transport way to drive a server with `anubis_mcp`'s own client. Used two
+tiers instead: (1) `mcp_server_test.exs` calls `init/2` and
+`handle_tool_call/3` directly as plain functions — no transport, no
+session, no supervisor — for schema equivalence, disallow-list behavior,
+and path/revision rejection, mirrored 1:1 against `Illume.Tools.dispatch/4`
+calls; (2) `mcp_server_e2e_test.exs`, tagged `:e2e` and excluded from the
+default `mix test` run (`ExUnit.start(exclude: [:e2e])` in
+`test/test_helper.exs`; run explicitly with `mix test --only e2e`), starts
+the actual compiled escript as a real OS subprocess and drives it with a
+real `Anubis.Client` over real stdio — protocol handshake, tool listing, a
+real tool call round-trip. This does spawn one OS subprocess (our own
+compiled escript, not an external `npx`/`uvx`-style tool), a lighter
+version of what the spec's "no subprocess" guidance was steering away
+from; flagged explicitly rather than silently reinterpreted.
+
+### 52. `anubis_mcp`'s own stdio Logger-redirect is a no-op; worked around in `Illume.CLI`
+**Date:** 2026-09-14 · **Status:** Fixed
+The end-to-end smoke test (entry 51) failed its first real run with a
+flood of `decode_failed`/`invalid_json` client warnings. Cause: Elixir's
+default `:logger` handler writes to stdout, and `anubis_mcp`'s stdio
+transport reads this process's own stdout as newline-delimited JSON-RPC —
+any log line corrupts the protocol stream. `Anubis.Server.Transport.STDIO.init/1`
+(`deps/anubis_mcp/lib/anubis/server/transport/stdio.ex:74`) already tries
+to guard against exactly this via
+`:logger.update_handler_config(:default, :config, %{type: :standard_error})`,
+but that call's result is discarded — and it always fails.
+`logger_std_h` refuses to change a *running* handler's `:type` (Erlang
+returns `{:error, {:illegal_config_change, ...}}`; reproduced directly in
+`iex` before touching any code), so the library's own fix has never
+actually worked. This is a **known, unresolved upstream bug**: the
+maintainer confirmed it in `zoedsoupe/anubis-mcp` issue #14 ("we indeed
+have a bug on the server part because of the library logs... for STDIO
+transport"), tracked as issue #25 (closed without the underlying fix
+working, per direct testing against 2.0.0 — the latest published
+release as of this writing). Fixed on our side in
+`Illume.CLI.redirect_logger_to_stderr/0`, called before starting the
+server: remove the `:default` handler and re-add it with the same
+formatter/filters/level, only the device changed — the only way Erlang
+actually allows this change. Cross-checked against Tidewave's own MCP
+stdio proxy (`tidewave_phoenix`'s `lib/mix/tasks/tidewave.proxy.ex`,
+`redirect_logs_to_stderr/0`), which does the identical remove-and-re-add
+for the identical reason — independent confirmation this is the correct
+fix, not a guess.
+
+### 53. Stdio EOF restart-storm: `Anubis.Server.Supervisor`'s `:one_for_all` has no backoff
+**Date:** 2026-09-14 · **Status:** Mitigated, not fixed (upstream)
+Also found by the entry-51 smoke test: once the connected client
+disconnects (stdin EOF), `Anubis.Server.Transport.STDIO` stops `:normal`
+as designed — but its supervisor (`Anubis.Server.Supervisor`, `:one_for_all`,
+default restart intensity) restarts the whole session tree, which sees the
+same permanently-closed stdin and hits EOF again immediately, in a loop
+with no backoff, typically exhausting the default intensity (3 restarts /
+5s) within the same millisecond and crashing the supervisor with
+`reached_max_restart_intensity`. A related, merged upstream fix (PR #240,
+`restart: :temporary` for `Session` processes) addresses a *different*
+lifecycle event (idle-session expiry) and does not touch the transport
+child, which stays `:permanent`. No supported option exists on
+`Anubis.Server.Supervisor.start_link/2` to change this. Tidewave's own
+stdio server (`Tidewave.MCP.Stdio.run/2`) avoids the whole class of bug
+architecturally — no OTP supervision at all, just a blocking
+`IO.stream(:line) |> Enum.each(...)` loop that ends naturally on EOF —
+which isn't available to us without abandoning `use Anubis.Server`
+entirely. Decided against that scope; instead `Illume.CLI.serve/1` now
+monitors the started `Anubis.Server.Supervisor` pid
+(`await_server_exit/1`) and exits the escript — cleanly on `:normal`/
+`:shutdown`, with a visible error otherwise — the moment it dies, rather
+than sleeping forever as a zombie process with a dead server underneath
+it. The restart storm itself (a few milliseconds of CPU spin before the
+crash) is not eliminated; filing this upstream is future work, not done
+as part of this pass. The end-to-end test's own teardown avoids the same
+trigger from the client side too: no explicit `Supervisor.stop/1` on the
+test's `Anubis.Client` (observed to itself crash the test's BEAM with a
+`badarg` from inside its own EXIT report) — the client supervisor is
+linked to the test process and torn down via that link when the test
+ends instead.
+
+## Shared question-runner (Component 2)
+
+### 54. `Illume.QA.ask/4` extracted from `Illume.CLI.run_agent/3` verbatim
+**Date:** 2026-09-14 · **Status:** Done
+Component 3's LiveView needs the exact same "start an `Illume.Agent`, block
+on `ask/2`" behavior the CLI already had inlined in `run_agent/3`. Extracted
+as `Illume.QA.ask/4` with no behavior change — same
+`DynamicSupervisor.start_child(Illume.AgentSupervisor, ...)` +
+`Illume.Agent.ask/2` call, `opts` now passed through so a caller (tests,
+Component 3) can override `model_timeout`/`tool_timeout`/`client` the same
+way `Illume.Agent.init/1` already supports, without new surface area.
+`run_agent/3` now delegates in one line. Regression check: `cli_test.exs`
+and `agent_test.exs` needed no changes and stayed green — per the spec, a
+break there would have been a signal the extraction leaked something.
+
+## Web front end (Component 3)
+
+### 55. `Illume.Endpoint` + `config/` added now, ahead of the Endpoint-wiring task (3.3)
+**Date:** 2026-09-14 · **Status:** Done
+Task 3.1's `start_async`/`handle_async` spike needs a real, running
+`Phoenix.Endpoint` (`Phoenix.LiveViewTest.live_isolated/3` reads endpoint
+config from an ETS table populated only once the endpoint process starts —
+confirmed by reproducing the exact `ArgumentError` first, not guessing).
+That dependency runs the other way from the plan's own task order (3.2
+adds the deps; 3.1 needs them to write the spike at all), so the minimal
+permanent pieces — `config/{config,dev,test,prod}.exs` and
+`lib/illume/endpoint.ex` — were built now rather than as throwaway
+test-only scaffolding, since Decision C already fully specifies what this
+endpoint looks like (on-demand start via `mix illume.server`, no change to
+`Illume.Application`'s default children) — there was nothing left
+genuinely ambiguous to defer. `config/prod.exs` is intentionally near-
+empty: this project has no `mix release`/production deployment path in
+scope, only the escript and `mix illume.server` (both dev-env by default).
+The endpoint's `server: false` default (overridden explicitly by
+`mix illume.server` in task 3.3) mirrors `mix phx.server`'s own
+`PHX_SERVER`-gated convention, for the same reason: compiling or testing
+the project must never bind a port by accident.
+
+Also added `import_deps: [:phoenix]` and the `Phoenix.LiveView.HTMLFormatter`
+plugin to `.formatter.exs`, and `lazy_html` as a test-only dep
+(`Phoenix.LiveViewTest` requires it for `live_isolated/3`'s HTML
+assertions — hit as a real, actionable runtime error, not anticipated in
+advance). `plug`'s existing `only: :test` restriction had to be dropped
+too: `bandit`'s `websock_adapter` needs `plug` as a real runtime
+dependency once Bandit is added, and Mix refuses to resolve a dependency
+tree with conflicting `:only` requirements for the same package.
+
+### 56. `start_async`/`handle_async` spike confirms the design is safe for `Illume.QA.ask/4` specifically
+**Date:** 2026-09-14 · **Status:** Confirmed, not just assumed
+`test/illume/async_spike_test.exs` proves both claims the plan's research
+section needed proven live, not cited from docs: (1) a raising async fun
+delivers `{:exit, {exception, stacktrace}}` to `handle_async/3` without
+crashing the LiveView process; (2) a fun running past 5s (the exact
+duration `async_stream_nolink`'s old default timeout used to bite this
+project, entry 45) is neither killed nor treated as a crash — it
+completes normally via `{:ok, result}` once it actually returns.
+
+Reading `Phoenix.LiveView.Async`'s source (not just black-box testing)
+explains *why*, and surfaces the one real gap: `run_async_task/5` starts
+the async fun under `Task.start_link/1`, directly linked to the LiveView
+process — `do_async/5` wraps the fun in `try/catch`, reports the result,
+then explicitly `Process.unlink/1`s *before* re-raising, so a plain
+raise/exit occurring in the fun's own process (exactly what
+`GenServer.call` failing looks like) is always caught and unlinked first.
+The gap: if the fun itself spawns *another* linked process (e.g. an inner
+`Task.async/1`) and that one crashes, the untrapped EXIT signal kills the
+async task before it ever reaches its own unlink-then-reraise, and that
+kill *would* propagate to the LiveView for real, bypassing `handle_async/3`
+entirely — this is the literal scenario the plan's research flagged as
+unverified. It doesn't apply here: `Illume.QA.ask/4` only does
+`DynamicSupervisor.start_child/2` (no link to the caller) and a plain
+`GenServer.call/3` (no persistent link either) — no nested linked process
+is ever created inside the async fun. Confirmed by reading the call
+chain, not assumed from the absence of a crash in testing.
+
+### 57. `mix illume.server` starts `Illume.Endpoint` under its own supervisor, not `Illume.Application`
+**Date:** 2026-09-14 · **Status:** Done
+Mirrors Decision A's pattern for `Illume.MCPServer`: `Illume.Application`'s
+default children stay exactly as they were (`Task.Supervisor`,
+`AgentSupervisor`, `MCPSupervisor`, `MCPServerSupervisor` — confirmed
+unchanged by diff, not just by intent) so the plain CLI/escript path never
+starts a PubSub or an HTTP listener it doesn't need. `mix illume.server`
+(`lib/mix/tasks/illume.server.ex`) runs `app.config`, flips the endpoint's
+`:server` config to `true` (merged into existing config via
+`Keyword.put/3` — a naive `Application.put_env/3` would have clobbered
+`secret_key_base`/`live_view`/`pubsub_server` wholesale, since `put_env`
+replaces the whole value, not just one key inside it), starts the app
+normally via `Application.ensure_all_started/1`, then starts
+`Phoenix.PubSub` and `Illume.Endpoint` under a fresh `Supervisor` the task
+owns directly.
+
+Two real, live-caught issues along the way: (1) Phoenix defaults to
+`Phoenix.Endpoint.Cowboy2Adapter` unless told otherwise, and `plug_cowboy`
+was never added as a dependency (the plan chose Bandit specifically) —
+the endpoint failed to start with `Plug.Cowboy is not available` on the
+first real run; fixed with `config :illume, Illume.Endpoint, adapter:
+Bandit.PhoenixAdapter` in `config/config.exs`. (2) `mix dialyzer` couldn't
+see `Mix.Task`'s callbacks or `Mix.shell/0` for the new task module
+(`Callback info about the Mix.Task behaviour is not available`) — fixed
+by adding `plt_add_apps: [:mix]` to `mix.exs`'s dialyzer config.
+
+Manually verified end to end: `mix illume.server` binds
+`http://localhost:4000` via Bandit (confirmed in the log line and via
+`lsof`), curling it returns `500` (expected — no router/route exists
+until task 3.4), and `Illume.Application`'s own children remain
+untouched.
+
+### 58. `target_dir` for the web UI: a compile-time constant resolved from the module's own source path, not `File.cwd!()`
+**Date:** 2026-09-14 · **Status:** Done
+`Illume.QuestionLive`'s `@target_dir` is `Path.expand("../..", __DIR__)`,
+not `File.cwd!()` — both are "hardcoded" in the sense the spec requires
+(never form input, never runtime-supplied), but `File.cwd!()` bakes in
+whatever directory `mix compile` happened to run from, which is fragile
+if `mix illume.server` is ever invoked from elsewhere. Resolving from
+`__DIR__` (this module's own file location under `lib/illume/`) is
+correct regardless of invocation directory, for the same reason
+`Illume.MCPServer`'s footguns (entry 49) favored being explicit over
+convenient elsewhere in this phase. `handle_async/3`'s three clauses map directly to
+`Illume.Agent.ask/2`'s existing contract: `{:ok, {:ok, text}}` renders the
+answer, `{:ok, {:error, reason}}` renders `reason` verbatim (it is already
+a formatted string — every error path in `Illume.Agent` runs through
+`format_error/1` before replying, confirmed by reading `finish/2`'s call
+sites directly rather than assuming), and `{:exit, _reason}` renders a
+generic message — the raw exit reason is a crash term/stacktrace, not
+something to show a user, and per entry 56, this path is already known
+unreachable for `Illume.QA.ask/4`'s specific call shape.
+
+### 59. Status-line telemetry handler gated on `asking?`, since `:telemetry` events aren't scoped to a request
+**Date:** 2026-09-14 · **Status:** Done
+`Illume.QuestionLive` attaches `:telemetry.attach_many/4` on
+`[:illume, :model_call, :start]` / `[:illume, :tool_call, :start]` /
+`[:illume, :loop_turn, :stop]` only on the connected mount (`connected?/1`
+guards it — the static pre-connect render would otherwise attach and
+immediately leak a handler with no matching `terminate/2` call), with a
+handler ID scoped to `{__MODULE__, self()}` and detached in `terminate/2`.
+These events are global — Illume has no per-request/session scoping for
+`:telemetry`, so every open LiveView connection's handler receives every
+in-flight agent's events, not just its own. `handle_info/2` only applies
+an incoming event to `status_line` while `assigns.asking?` is true;
+without that guard, an unrelated question (another tab, another
+concurrent request) would flash a stray status update on an idle page.
+Not a new gap introduced here — `Illume.Agent`'s telemetry vocabulary was
+already global/unscoped — just the first place a UI reads it live enough
+for that to be visibly wrong if unguarded.
+
+### 60. `qa_client` Application-env seam added so `QuestionLive` can be tested with a mocked LLM client
+**Date:** 2026-09-14 · **Status:** Done
+`Illume.QuestionLive.handle_event/3` hardcodes `target_dir` and `:direct`
+backend (both per spec, never test/request-configurable) but needs *some*
+way for tests to inject `Illume.LLM.ClientMock` instead of the real
+Anthropic client, without adding a form field or otherwise widening the
+page's real input surface. Added `Application.get_env(:illume,
+:qa_client)`, forwarded as `Illume.QA.ask/4`'s `opts[:client]` — same
+shape as the existing `Illume.Tools.MCP.client_adapter/0` seam, not a new
+pattern. `test/illume/question_live_test.exs` sets it in `setup`/`on_exit`.
+
+Also confirmed empirically why `handle_async/3`'s `{:exit, reason}` clause
+can't be reached through a mocked client at all, even a raising or
+never-returning one: `Illume.Agent`/`Illume.Tools.Runner`'s whole design
+isolates every model/tool failure into a formatted `{:ok, {:error,
+string}}` before `Illume.QA.ask/4` ever returns (see DECISIONS.md entry
+56) — a mocked crash or `{:error, :timeout}` both land in the *already*
+-reachable `{:ok, {:error, reason}}` branch instead. Tested `{:exit,
+reason}` directly as a plain function call on `handle_async/3` (mirroring
+how `mcp_server_test.exs` unit-tests callbacks no transport can cheaply
+exercise) rather than contriving an artificial crash path through
+`Illume.QA.ask/4` itself just to reach it.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
@@ -538,6 +833,17 @@ being restored, consistent with every other fix in this pass.
   cannot trap `:sigint`; closing this fully would require dropping to
   undocumented-for-typical-use low-level OS signal APIs. Documented in
   `Illume.CLI`'s moduledoc; not fixed.
-- No MCP server mode, multi-turn conversation support, or provider
-  abstraction — explicitly out of scope for both the original spec and
-  the hardening pass, not oversights.
+- ~~No MCP server mode~~ — added (`--serve`, entries 49-53). The
+  whole-agent-loop-as-one-tool design (exposing `Illume.QA.ask/4` itself
+  as a single MCP tool, rather than the five read-only primitives) remains
+  deferred — out of scope for this pass, not an oversight.
+- No multi-turn conversation support or provider abstraction — explicitly
+  out of scope for both the original spec and the hardening pass, not
+  oversights.
+- ~~No web interface~~ — added (`mix illume.server`, entries 55-60). No
+  auth, no multi-tenancy — single local user in spirit, not a deployment
+  target.
+- The stdio EOF restart-storm in `anubis_mcp`'s `Anubis.Server.Supervisor`
+  (entry 53) is mitigated (the escript exits cleanly instead of hanging)
+  but not fixed — the underlying few-millisecond restart storm still
+  happens on every client disconnect. Filing this upstream is future work.

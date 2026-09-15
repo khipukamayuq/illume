@@ -68,12 +68,55 @@ reference servers instead of direct in-process calls (requires `npx` and
 ./illume --mcp . "where is the tool allow-list enforced?"
 ```
 
+## MCP server mode
+
+Run Illume itself as an MCP server, exposing the same five read-only
+tools over stdio to an external MCP client (Claude Desktop, another
+agent, etc.):
+
+```sh
+./illume --serve <target_dir>
+```
+
+This is a distinct axis from `--mcp` above: `--mcp` controls which
+backend *this process's own* agent loop uses internally, while `--serve`
+skips the agent loop and question entirely and turns Illume into a tool
+provider for someone else's client. `target_dir` is fixed for the
+process's whole lifetime (no per-call override) and no
+`ANTHROPIC_API_KEY` is required — no model is called in this mode. The
+process blocks until the connected client disconnects, then exits (see
+DECISIONS.md entries 49-53 for the two real bugs — one in `anubis_mcp`
+itself — this mode's implementation had to work around).
+
+## Web front end
+
+A minimal LiveView front end — a question field, a live status line, and
+the rendered answer — for browsing the same Q&A capability without a
+terminal:
+
+```sh
+mix illume.server
+```
+
+Starts a Phoenix/Bandit endpoint at `http://localhost:4000`, on demand —
+`Illume.Application`'s default children are unchanged, so the plain CLI
+never starts a PubSub or an HTTP listener it doesn't need. `target_dir`
+for the web form is a hardcoded compile-time constant (illume's own
+checkout) — the page never accepts an arbitrary filesystem path as
+request input, by design, not by omission (see DECISIONS.md entry 58).
+The status line is driven by `Illume.Agent`'s existing `:telemetry`
+events, so it reflects what the agent is actually doing (calling the
+model, running a tool) rather than a generic spinner.
+
 ## Scope
 
 Single provider (Anthropic), single agent, strictly read-only — no code
 execution, file writes, or commits, enforced by the allow-list rather than
-assumed from any tool's own configuration. No streaming, no persistence,
-no web interface, no MCP *server* mode.
+assumed from any tool's own configuration. No streaming, no persistence.
+MCP *server* mode exposes only the five existing read-only tools
+individually — not the whole agent loop as a single tool. The web front
+end is single-page, single-user-at-a-time in spirit (no auth, meant for
+local use) — not a multi-tenant deployment.
 
 ## Testing
 
@@ -85,6 +128,16 @@ The suite runs offline — no real network calls to Anthropic or an MCP
 server. The LLM client is Mox-mocked, MCP calls are mocked at the
 `Anubis.Client` boundary, and `Illume.LLM.AnthropicClient` is tested via
 `Req.Test` intercepting the real request pipeline.
+
+One test is excluded by default: `mcp_server_e2e_test.exs` (tagged
+`:e2e`) builds the escript and drives it as a real OS subprocess over
+real stdio — the one deliberate exception to "no real subprocesses" in
+this suite, proving the `--serve` stack works end to end at least once.
+Run it explicitly with:
+
+```sh
+mix test --only e2e
+```
 
 CI (GitHub Actions) runs `mix format --check-formatted`, `mix test`,
 `mix credo --strict`, and `mix dialyzer` on every push and PR, pinned to

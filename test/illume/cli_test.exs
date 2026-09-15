@@ -22,6 +22,16 @@ defmodule Illume.CLITest do
       assert CLI.parse_args(["--unknown", "dir", "question"]) == :error
       assert CLI.parse_args(["dir", "question", "extra"]) == :error
     end
+
+    test "parses --serve <target_dir> as a serve request" do
+      assert CLI.parse_args(["--serve", "/some/dir"]) == {:serve, "/some/dir"}
+    end
+
+    test "rejects --serve combined with a question or with --mcp" do
+      assert CLI.parse_args(["--serve", "/some/dir", "a question"]) == :error
+      assert CLI.parse_args(["--serve"]) == :error
+      assert CLI.parse_args(["--serve", "--mcp", "/some/dir"]) == :error
+    end
   end
 
   describe "validate/1" do
