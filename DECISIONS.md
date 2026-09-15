@@ -930,6 +930,51 @@ just the rendered HTML, per the plan's own instruction — asserting only
 the rendered output wouldn't distinguish "the guard ran" from "the guard
 never ran but the answer happened to look the same."
 
+### 64. Bearer-token auth on the web endpoint (review finding M2)
+**Date:** 2026-09-14 · **Status:** Done
+The review's M2 finding: `check_origin` (Phoenix's default CSRF-adjacent
+websocket protection) only stops a browser-originated cross-site
+connection — it does nothing against a non-browser local client (no
+`Origin` header at all), which is the actual realistic attack path for a
+single-user local dev tool: any co-resident local process could drive
+unbounded billed Anthropic calls through the open port. Confirmed with
+the user (bearer-token option, over documentation-only) before
+implementing.
+
+`mix illume.server` generates one random token per run
+(`:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)`),
+stores it via `Application.put_env/3` (same one-shot pattern as
+`mcp_server_target_dir`, entry 50), and prints it as part of the startup
+URL. `QuestionLive.mount/3` checks the `token` query param against it
+with `Plug.Crypto.secure_compare/2` (timing-safe, not `==`).
+
+Two implementation details worth recording:
+1. **`mount/3`'s `params` is not always a map.** `live_isolated/3` (used
+   by every other test in this file) always passes the literal atom
+   `:not_mounted_at_router`, never real query params — confirmed
+   empirically after a `FunctionClauseError` in `Access.get/3`.
+   `authorized?/1` pattern-matches `%{"token" => token}` explicitly and
+   falls through to "authorized only if no token is configured" for
+   anything else, so `live_isolated/3`-based tests keep working
+   unmodified (no token ever gets configured in most test setups). The
+   four new tests that actually exercise the token check
+   (`question_live_test.exs`, "bearer-token auth (P2-T3)") route through
+   `Illume.Router` for real via `Phoenix.LiveViewTest.live/2` instead —
+   the only way to get a real `token` query param into `mount/3` at all.
+2. **Unauthorized doesn't crash the mount or close the socket** — `mount/3`
+   still returns `{:ok, socket}`, with `assign(authorized?: false)`.
+   `render/1` shows a plain "Unauthorized" message instead of the form,
+   and `handle_event("ask", ...)` also checks `authorized?` before doing
+   anything (not just gating what's rendered — a raw socket client could
+   otherwise send a `phx-submit` event directly regardless of what's on
+   screen). Chose this over raising/refusing the LiveView connection
+   outright: no valid `mount/3` return conveys "reject the socket," so
+   the alternative would be an unhandled raise inside `mount/3` — noisy,
+   inconsistent with this codebase's established "isolate every failure
+   gracefully" design (entry 56), and no more secure in practice, since
+   the billing-relevant path (`handle_event/3`) is independently guarded
+   either way.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.

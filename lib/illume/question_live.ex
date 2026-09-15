@@ -29,8 +29,9 @@ defmodule Illume.QuestionLive do
   ]
 
   @impl true
-  def mount(_params, _session, socket) do
-    handler_id = attach_telemetry(socket)
+  def mount(params, _session, socket) do
+    authorized? = authorized?(params)
+    handler_id = if authorized?, do: attach_telemetry(socket)
 
     {:ok,
      assign(socket,
@@ -38,9 +39,28 @@ defmodule Illume.QuestionLive do
        answer: nil,
        asking?: false,
        status_line: nil,
-       telemetry_handler_id: handler_id
+       telemetry_handler_id: handler_id,
+       authorized?: authorized?
      )}
   end
+
+  # `mix illume.server` generates a token once per run and prints it as
+  # part of the startup URL (`?token=...`); `:web_token` is unset when
+  # the endpoint is started any other way (tests, or a hypothetical
+  # direct `Illume.Endpoint` start), in which case the page stays
+  # unauthenticated, same as before this check existed. See DECISIONS.md
+  # entry 64.
+  @spec authorized?(map() | :not_mounted_at_router) :: boolean()
+  defp authorized?(%{"token" => token}) when is_binary(token) do
+    case Application.get_env(:illume, :web_token) do
+      nil -> true
+      expected -> Plug.Crypto.secure_compare(token, expected)
+    end
+  end
+
+  # `live_isolated/3` (no real router params) or a mount with no `token`
+  # query param at all — authorized only if no token is configured.
+  defp authorized?(_params), do: Application.get_env(:illume, :web_token) == nil
 
   # Only the connected mount (not the initial static render) gets a handler
   # — attaching twice per connection would leak one on every reconnect,
@@ -82,18 +102,25 @@ defmodule Illume.QuestionLive do
     ~H"""
     <div>
       <h1>Illume</h1>
-      <form phx-submit="ask">
-        <input
-          type="text"
-          name="question"
-          value={@question}
-          placeholder="Ask a question about this codebase"
-          disabled={@asking?}
-        />
-        <button type="submit" disabled={@asking?}>Ask</button>
-      </form>
-      <p :if={@status_line}>{@status_line}</p>
-      <p :if={@answer}>{@answer}</p>
+      <p :if={not @authorized?}>
+        Unauthorized — pass the token printed by <code>mix illume.server</code>
+        as <code>?token=...</code>
+        in the URL.
+      </p>
+      <div :if={@authorized?}>
+        <form phx-submit="ask">
+          <input
+            type="text"
+            name="question"
+            value={@question}
+            placeholder="Ask a question about this codebase"
+            disabled={@asking?}
+          />
+          <button type="submit" disabled={@asking?}>Ask</button>
+        </form>
+        <p :if={@status_line}>{@status_line}</p>
+        <p :if={@answer}>{@answer}</p>
+      </div>
     </div>
     """
   end
@@ -102,7 +129,8 @@ defmodule Illume.QuestionLive do
   def handle_event("ask", %{"question" => question}, socket) do
     trimmed = String.trim(question)
 
-    if socket.assigns.asking? or trimmed == "" or byte_size(trimmed) > @max_question_bytes do
+    if not socket.assigns.authorized? or socket.assigns.asking? or trimmed == "" or
+         byte_size(trimmed) > @max_question_bytes do
       {:noreply, socket}
     else
       opts = qa_opts()
