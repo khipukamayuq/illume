@@ -73,4 +73,38 @@ defmodule Illume.Tools.GrepTest do
 
     assert Grep.grep_content(tmp_dir, %{"pattern" => "needle"}) == {:ok, "no matches"}
   end
+
+  # Another regression the explicit-file-list design (above) introduced:
+  # `grep -r` silently skips a broken symlink during its own recursive
+  # walk, but a discovered-and-listed broken symlink passed as an explicit
+  # argument makes `grep` exit 2 ("No such file or directory") for that
+  # one operand — which used to abort the *entire* search, discarding any
+  # real matches already found in the same batch (see DECISIONS.md).
+  #
+  # `File.regular?/1` (the fallback walk's own filter) already excludes a
+  # broken symlink, so this needs the git-aware path specifically — `git
+  # ls-files` lists a tracked symlink regardless of whether its target
+  # exists — to actually reach `grep` with one.
+  test "a broken symlink alongside a real match does not abort the whole search", %{
+    tmp_dir: tmp_dir
+  } do
+    File.write!(Path.join(tmp_dir, "real.ex"), "def needle, do: :ok")
+    File.ln_s!("does_not_exist_target", Path.join(tmp_dir, "broken_link.ex"))
+    System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    System.cmd("git", ["add", "-A"], cd: tmp_dir)
+
+    assert {:ok, output} = Grep.grep_content(tmp_dir, %{"pattern" => "needle"})
+    assert output =~ "real.ex"
+    refute output =~ "No such file"
+  end
+
+  test "a broken symlink with no other matches is a clean no-matches, not an error", %{
+    tmp_dir: tmp_dir
+  } do
+    File.ln_s!("does_not_exist_target", Path.join(tmp_dir, "broken_link.ex"))
+    System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    System.cmd("git", ["add", "-A"], cd: tmp_dir)
+
+    assert Grep.grep_content(tmp_dir, %{"pattern" => "needle"}) == {:ok, "no matches"}
+  end
 end

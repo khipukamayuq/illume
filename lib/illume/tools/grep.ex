@@ -20,6 +20,18 @@ defmodule Illume.Tools.Grep do
   returns, `@batch_size` at a time as explicit `grep` arguments rather
   than letting `grep -r` walk the directory itself — keeps a single
   huge-file-count target from building one unbounded argument list.
+
+  Passing an explicit file list (rather than a directory for `grep -r`
+  to walk itself) means `grep` sees, and must tolerate, conditions its
+  own recursive walk would have silently skipped: a broken symlink, a
+  submodule/gitlink path, a file that became unreadable or was deleted
+  between `FileDiscovery.list/1` and this call. `-s` suppresses grep's
+  own error text for these (which would otherwise leak into what's
+  returned to the model, since stderr is folded into the captured
+  output); exit status `2` (which `grep` still returns for them even
+  with `-s`) is treated as a partial result, not a hard failure — a
+  match already found in the same batch isn't discarded just because
+  a different file in that batch couldn't be read (see DECISIONS.md).
   """
   @spec grep_content(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
   def grep_content(target_dir, %{"pattern" => pattern} = input) do
@@ -46,12 +58,12 @@ defmodule Illume.Tools.Grep do
           {:ok, String.t()} | :no_matches | {:error, String.t()}
   defp run_batches(batches, pattern) do
     Enum.reduce_while(batches, :no_matches, fn batch, acc ->
-      args = ["-Hn", "-F", "-m", "#{@max_lines}", "--", pattern] ++ batch
+      args = ["-Hns", "-F", "-m", "#{@max_lines}", "--", pattern] ++ batch
 
       case System.cmd("grep", args, stderr_to_stdout: true) do
-        {output, 0} -> {:cont, {:ok, merge(acc, output)}}
-        {_output, 1} -> {:cont, acc}
-        {output, _} -> {:halt, {:error, "grep failed: #{output}"}}
+        {"", status} when status in [0, 1, 2] -> {:cont, acc}
+        {output, status} when status in [0, 1, 2] -> {:cont, {:ok, merge(acc, output)}}
+        {output, _status} -> {:halt, {:error, "grep failed: #{output}"}}
       end
     end)
   end
