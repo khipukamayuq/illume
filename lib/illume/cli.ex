@@ -35,6 +35,16 @@ defmodule Illume.CLI do
   spawned `npx`/`uvx` subprocesses running until the VM exits or is
   force-killed.
 
+  The same `:sigint` limitation applies to `--serve`, though with a
+  different consequence: `--serve` spawns no subprocess of its own (it
+  *is* the child of whatever MCP client started it), so there's nothing
+  to leak — but a direct Ctrl-C also bypasses `await_server_exit/1`'s
+  graceful-exit monitor, the same as it bypasses `stop_clients/0` above.
+  In practice this rarely matters: a real MCP client disconnects by
+  closing the pipe (stdin EOF), which `--serve` already handles (see
+  entry 53's restart-storm mitigation) — SIGINT only comes up if a human
+  runs `--serve` directly at a terminal and interrupts it themselves.
+
   Argument parsing and validation (`parse_args/1`, `validate/1`) are pure
   — no I/O, no `System.halt/1` — so they're testable directly; `main/1`
   is the thin I/O boundary around them.

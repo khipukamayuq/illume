@@ -431,11 +431,19 @@ them, either fixed or explicitly documented as deferred.
 
 ## Known gaps (deliberately deferred, not silently skipped)
 
-- A `--mcp`/`mix illume.server` run interrupted with Ctrl-C doesn't run
-  cleanup (spawned subprocesses for `--mcp`; no effect either way for
-  `mix illume.server`) — Elixir's public API cannot trap `:sigint`;
+- A `--mcp`/`--serve`/`mix illume.server` run interrupted with Ctrl-C
+  doesn't run cleanup — Elixir's public API cannot trap `:sigint`;
   closing this fully would require undocumented low-level OS signal
-  APIs. Documented in both entrypoints' moduledocs.
+  APIs. Consequence differs by entrypoint: `--mcp` leaks spawned
+  `npx`/`uvx` subprocesses; `--serve` and `mix illume.server` have
+  nothing of their own to leak, but a direct Ctrl-C on `--serve` also
+  bypasses `await_server_exit/1`'s graceful-exit monitor (moot in
+  practice — a real MCP client disconnects via stdin EOF, which
+  `--serve` already handles; entry 53). `--serve`'s exposure to this
+  wasn't documented until noticed well after `--serve` itself was
+  built — the original note (entry 41) predates `--serve`'s existence
+  by a week and was never revisited against it. Documented in all
+  three entrypoints' moduledocs now.
 - No multi-turn conversation support, provider abstraction, or
   multi-user auth/accounts — explicitly out of scope throughout; the web
   UI and MCP server stay single-operator, local-only in spirit.
