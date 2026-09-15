@@ -820,6 +820,83 @@ how `mcp_server_test.exs` unit-tests callbacks no transport can cheaply
 exercise) rather than contriving an artificial crash path through
 `Illume.QA.ask/4` itself just to reach it.
 
+### 61. The web UI didn't actually work in a real browser — hardening-pass fix
+**Date:** 2026-09-14 · **Status:** Done
+The `/phx:review` pass on Components 1-3 found a Critical gap: every test
+in this branch used `live_isolated/3`, which bypasses the browser/JS
+layer entirely, so nothing ever caught that `QuestionLive`'s `render/1`
+emitted a bare `<div>` with no surrounding `<html>`/`<head>`, no
+`<script>` loading LiveView's client JS, and no `Plug.Static` to serve
+it. A real browser could never open the LiveView websocket.
+
+Fixed with `Illume.Layouts.root/1` (an inline `Phoenix.Component`, not a
+separate `.heex` file — a single layout with no CSS/asset pipeline
+didn't warrant a second file) wired via the router's `live_session
+:default, root_layout: {Illume.Layouts, :root}` — the *root* layout
+option, not `use Phoenix.LiveView, layout:` (that's the *inner* layout;
+it doesn't wrap the page in `<html>`, so it can't carry the CSRF meta tag
+or script tags). Confirmed empirically (`deps/plug/lib/plug/static.ex`
+line 466-467) that `Plug.Static`'s `:from` tuple resolves through
+`Application.app_dir/1`, which works for *any* loaded OTP application —
+not just the host app — so `phoenix.js`/`phoenix_live_view.js` are
+served straight from `{:phoenix, "priv/static"}` /
+`{:phoenix_live_view, "priv/static"}` with no copy-into-`priv/static`
+step, no build tooling, and no compile-time asset hook. Both files are
+plain global-exposing IIFE bundles (`var Phoenix = (() => {...})()`,
+`var LiveView = (() => {...})()`), not ES modules — confirmed by reading
+them directly — so the root layout's inline connect script uses the
+`Phoenix`/`LiveView` globals (`new LiveView.LiveSocket("/live",
+Phoenix.Socket, ...)`) rather than an `import`.
+
+Manually verified in a real Chrome tab (this is the one task in the
+whole hardening plan a `mix test` run cannot verify by itself): the
+console logs "mount: received diff" on load (proof the websocket joined
+and the server replied), and submitting a question round-trips in place
+with no page reload.
+
+**Two hard blockers found only by doing that manual check** (both
+pulled forward from Phase 2 of the hardening plan, because P1-T1's own
+verification could not pass without them — the plan had filed them as
+independent security tasks, not realizing they were load-bearing for the
+UI to function at all):
+
+1. `plug :protect_from_forgery` (planned as P2-T4, a router-hardening
+   task) turned out to be a functional dependency, not just a security
+   plug: it's the thing that actually writes the CSRF master token into
+   the session on first request. Without it, nothing ever writes to the
+   session, so `Plug.Session`'s cookie store never sends a `Set-Cookie`
+   header, the browser has no session cookie to present on the websocket
+   upgrade, `Phoenix.LiveView.Channel` sees `connect_info.session ==
+   nil`, and the join fails as "stale." The client's fallback behavior
+   for that failure is a full-page reload — which hits the exact same
+   missing-session state again, forever. Observed directly: 1477 tight-
+   loop console messages and 1000+ repeated `GET /` requests in under a
+   second before this was caught and the server killed.
+2. Fixing (1) immediately surfaced a second, previously-masked bug: both
+   dev/test `secret_key_base` values (added when the endpoint was first
+   built) were 62 bytes — 2 short of `Plug.Session`'s hardcoded 64-byte
+   minimum (`Plug.Session.COOKIE.validate_secret_key_base/1`). Nothing
+   had ever exercised the actual cookie-signing code path before, since
+   nothing wrote to the session until (1) was fixed, so this had been
+   silently wrong since Component 3 was first built. Regenerated both
+   (plus both `live_view: [signing_salt: ...]` values) via `mix
+   phx.gen.secret`, per the hardening plan's own P2-T2 (also pulled
+   forward with this fix, since it's the same blocking bug). The
+   original review had flagged the old values only as low-entropy
+   dictionary phrases — a real finding, but this makes clear the actual
+   severity was "the endpoint cannot complete a single request that
+   touches the session," not just weak secrets.
+
+Root-caused both via `:telemetry.attach/4` on `[:phoenix, :error_rendered]`
+to read the real `reason`/`stacktrace` out of the event metadata —
+`Phoenix.Endpoint.RenderErrors` re-raises the *original* exception after
+logging it, but only if rendering the error page itself succeeds; this
+app has no `ErrorHTML`/`ErrorView` module, so the render step's own
+`ArgumentError` ("no template defined") was masking the real one at
+every layer (`curl`, `Phoenix.Endpoint.call/2`, even `Mix.raise`-style
+rescues). The telemetry event's `reason` field bypasses that masking
+entirely.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.

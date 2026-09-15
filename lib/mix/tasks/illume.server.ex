@@ -23,6 +23,10 @@ defmodule Mix.Tasks.Illume.Server do
 
   @impl Mix.Task
   def run(_args) do
+    if Mix.env() == :prod do
+      Mix.raise("illume.server is a local dev tool; MIX_ENV=prod is unsupported")
+    end
+
     Mix.Task.run("app.config")
 
     endpoint_config = Application.get_env(:illume, Illume.Endpoint, [])
