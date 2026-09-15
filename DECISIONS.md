@@ -1226,10 +1226,30 @@ unstated.
 - No multi-turn conversation support or provider abstraction — explicitly
   out of scope for both the original spec and the hardening pass, not
   oversights.
-- ~~No web interface~~ — added (`mix illume.server`, entries 55-60). No
-  auth, no multi-tenancy — single local user in spirit, not a deployment
-  target.
+- ~~No web interface~~ — added (`mix illume.server`, entries 55-60), then
+  hardened (entries 61-72): real browser support, a server-side ask
+  guard, bearer-token auth (entry 64), standard security headers. Still
+  single-operator, local-only in spirit — no accounts, no
+  multi-tenancy, not a deployment target.
 - The stdio EOF restart-storm in `anubis_mcp`'s `Anubis.Server.Supervisor`
   (entry 53) is mitigated (the escript exits cleanly instead of hanging)
   but not fixed — the underlying few-millisecond restart storm still
   happens on every client disconnect. Filing this upstream is future work.
+- `test/illume/cli_test.exs`'s `validate/1` tests run `async: true` while
+  mutating the global `ANTHROPIC_API_KEY` env var — a real cross-test
+  race risk if another async test in the same run also touches that
+  var. Predates the `mcp-server-and-web` branch entirely; flagged by two
+  review agents during this hardening pass but out of scope for a
+  branch-specific pass — fixing it (most simply, `async: false` on that
+  one `describe` block) is optional future work, not forgotten.
+- The global `:telemetry` handler `QuestionLive.mount/3` attaches leaks
+  other sessions' tool *names* (never paths/content) across concurrent
+  LiveView connections — `Illume.Agent`'s telemetry vocabulary has no
+  per-request/session scoping, so every open connection's handler
+  receives every in-flight agent's events; `handle_info/2`'s own
+  `asking?` guard (entry 59) only stops an unrelated event from being
+  *displayed*, not from being received. Real but low-impact. Properly
+  scoping it means threading a request/agent identifier through
+  `Illume.Agent`'s telemetry vocabulary project-wide — judged a bigger
+  change than this hardening pass's scope, so documented instead of
+  fixed.
