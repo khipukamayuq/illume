@@ -8,7 +8,7 @@ defmodule Illume.Application do
   def start(_type, _args) do
     children = [
       {Task.Supervisor, name: Illume.ToolSupervisor},
-      {DynamicSupervisor, strategy: :one_for_one, name: Illume.AgentSupervisor},
+      {DynamicSupervisor, strategy: :one_for_one, max_children: 20, name: Illume.AgentSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: Illume.MCPSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: Illume.MCPServerSupervisor}
     ]

@@ -912,6 +912,24 @@ asserts the headers Phoenix actually sets, not the plan's original guess.
 Phoenix version in favor of `import Plug.Conn; import Phoenix.ConnTest`
 — used the latter here.
 
+### 63. Server-side `ask` guard + bounded agent concurrency
+**Date:** 2026-09-14 · **Status:** Done
+The review's M1 finding: `QuestionLive`'s `asking?`/length guard only
+existed client-side (the `disabled` attribute on the form). A non-browser
+client (or a hand-crafted websocket frame) can send a `phx-submit "ask"`
+event directly, bypassing any HTML attribute entirely, and each one spawns
+a real billed Anthropic call with no server-side limit. Fixed with a
+server-side check in `handle_event/3` — reject (no-op, no
+`Illume.QA.ask/4` call) when `asking?` is already true, the trimmed
+question is empty, or it exceeds 4000 bytes (a model-context ceiling, not
+a hard product requirement) — plus `max_children: 20` on
+`Illume.AgentSupervisor`'s `DynamicSupervisor` spec as defense in depth,
+so a bypass of the event-level guard still can't spawn unbounded
+concurrent agents. Tested via `Mox.deny/3`/an `expect` call-count, not
+just the rendered HTML, per the plan's own instruction — asserting only
+the rendered output wouldn't distinguish "the guard ran" from "the guard
+never ran but the answer happened to look the same."
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
