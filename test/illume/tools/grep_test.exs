@@ -42,7 +42,25 @@ defmodule Illume.Tools.GrepTest do
     File.write!(Path.join(tmp_dir, "big.txt"), content)
 
     assert {:ok, output} = Grep.grep_content(tmp_dir, %{"pattern" => "needle"})
-    assert length(String.split(output, "\n")) == 200
+    assert length(String.split(output, "\n")) == 20
+  end
+
+  # The per-file cap (above) and the total-output cap used to be the same
+  # number, which meant a single prolific file could consume the *entire*
+  # output budget by itself — a second file's real matches would be
+  # silently absent from the result, with nothing in the output
+  # indicating any other file was ever searched (see DECISIONS.md).
+  test "a noisy file does not crowd out a second file's matches entirely", %{tmp_dir: tmp_dir} do
+    File.write!(
+      Path.join(tmp_dir, "a_noisy_file.ex"),
+      Enum.map_join(1..300, "\n", &"needle line #{&1}")
+    )
+
+    File.write!(Path.join(tmp_dir, "b_specific_file.ex"), "needle one\nneedle two")
+
+    assert {:ok, output} = Grep.grep_content(tmp_dir, %{"pattern" => "needle"})
+    assert output =~ "a_noisy_file.ex"
+    assert output =~ "b_specific_file.ex"
   end
 
   test "rejects a subdirectory path that escapes the target dir", %{tmp_dir: tmp_dir} do
