@@ -493,6 +493,30 @@ them, either fixed or explicitly documented as deferred.
   by reverting the fix and confirming they fail, then restoring it,
   matching this project's established practice for every other
   behavioral fix in this log.
+- The same security review left two items explicitly flagged as
+  "not investigated" — followed up on both directly:
+  1. **`QuestionLive.authorized?/1` defaults to open when `:web_token`
+     is unset.** Traced every reference: the token is set in exactly one
+     place (`mix illume.server`, always, before the endpoint starts) and
+     read in exactly one place. `Illume.Application`'s own children
+     never start `Illume.Endpoint`, and the README documents exactly one
+     way to run the web UI. The only way to reach the open-by-default
+     state outside a test is deliberately bypassing that one entrypoint
+     (e.g. starting the endpoint by hand from `iex -S mix`) — real, but
+     narrow, and unreachable by accident since no release/deployment
+     path exists for this project. Left as-is, matching the same
+     decision already made when this was first raised in triage.
+  2. **`cap/2` reused the same 200-line constant as grep's own per-file
+     `-m` cap.** This one was a real, verifiable issue, not just a
+     coincidental overlap — reproduced directly: a file with 300
+     matches alongside a file with 3 more specific matches returned
+     *zero* lines from the second file, with nothing in the output
+     indicating a second file was even searched. Fixed by decoupling
+     the two into separate constants (`@max_lines_per_file 20`,
+     `@max_total_lines 200` unchanged) — a single noisy file can no
+     longer consume the entire result budget by itself. Verified the
+     same way as the fix above: reverted, confirmed both the existing
+     per-file test and the new crowding-out test fail, restored it.
 
 ## Known gaps (deliberately deferred, not silently skipped)
 
