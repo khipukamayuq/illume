@@ -405,28 +405,73 @@ them, either fixed or explicitly documented as deferred.
   letting `grep -r` walk the directory itself to being handed the
   discovered file list directly, batched (500 files per invocation) to
   avoid one unbounded argument list on a very large target.
+
+  **This introduced a real, High-severity regression, caught by an
+  independent focused security review (not this project's own testing)
+  and fixed the same day.** The git-based branch of
+  `FileDiscovery.list/1` applied no `PathConfinement.within?/2` filter at
+  all — unlike the fallback walk and `search_files`, both of which do.
+  `git ls-files` lists a tracked symlink as an ordinary entry regardless
+  of what it points to, and `grep_content`'s move to passing discovered
+  files as explicit `grep` arguments (above) converted a case `grep -r`'s
+  own recursive walk never followed (a symlinked entry it discovers
+  itself) into one `grep` *does* follow (a symlink named directly as an
+  operand) — reproduced directly: a git-tracked symlink to a file outside
+  `target_dir` had its contents returned by `grep_content`, attributed to
+  an in-repo path. This is the same vulnerability class as the earlier
+  "symlink-unaware confinement" bug, reintroduced by treating the new
+  discovery path as if it inherited the same safety property the old
+  `grep -r` behavior provided for free. Fixed by moving the confinement
+  filter into `FileDiscovery.list/1` itself, applied once to both
+  branches' results, rather than duplicated per-branch — so any future
+  caller of `list/1` inherits the guarantee instead of needing to
+  remember it. Added a symlink test for the git path specifically
+  (the existing one only covered the fallback walk) and an end-to-end
+  `grep_content` test reproducing the original leak.
 - The global `:telemetry` handler `QuestionLive.mount/3` attaches gave
   every open LiveView connection every in-flight agent's events — the
   `asking?` guard only stopped an unrelated event from being displayed,
   not from being received, so one connection's tool-call names could
   flash on another's screen. Fixed with a `request_id` (`make_ref/0`,
   fresh per `ask`) threaded through the existing `opts` pass-through
-  `Illume.QA.ask/4` already had (no new parameter needed there) into
-  `Illume.Agent`'s `init/1`, which stashes it in the process
-  dictionary — read back by the one private `telemetry/2` helper every
-  emission already goes through, so all ~15 call sites picked it up
-  without individually threading it, the same way `Logger.metadata/1`
-  attaches process-local context without touching every log call.
-  `QuestionLive.handle_info/2` now requires the incoming event's
-  `request_id` to match the connection's own current one, not just
-  `asking?`. Testing this precisely meant a small test redesign: the
-  connection's real `request_id` is opaque from outside `handle_event/3`
-  (fresh `make_ref/0` per ask), so there's no way to fire a *matching*
-  synthetic telemetry event at a real `live_isolated/3` view from a
-  test — exercised `handle_info/2` as a plain function instead (same
-  pattern already used for `terminate/2` and `handle_async/3`'s
-  `{:exit, reason}` case), which also let both the matching and
-  mismatched cases be asserted precisely, something the old
+  `Illume.QA.ask/4` already had into `Illume.Agent`'s `init/1`, stamped
+  onto every `:telemetry` event's metadata by the module's one shared
+  `telemetry/3` helper. `QuestionLive.handle_info/2` now requires the
+  incoming event's `request_id` to match the connection's own current
+  one, not just `asking?`.
+
+  **The first version of this fix (process-dictionary-based) shipped
+  with a real bug, also caught by the same focused security review**:
+  `run_tool/2`/`run_allowed_tool/4` — which emit every `[:tool_call,
+  ...]` event, the exact category the original leak was about — run
+  inside `Task.Supervisor.async_stream_nolink` child processes, and the
+  BEAM does not inherit a spawning process's dictionary. Those events
+  therefore always carried `request_id: nil`, which can never equal a
+  real `make_ref()` — so the fix closed the leak by making every
+  tool-call status update silently undeliverable, not by correctly
+  routing it. (The earlier claim in this entry that "all ~15 call sites
+  picked it up" this way was wrong — only the ones that happen to run in
+  the Agent's own process, `model_call`/`loop_turn` events, ever did.)
+  Corrected by moving `request_id` onto the `%Illume.Agent{}` struct
+  instead (set once at `init/1`, immutable) and threading it explicitly
+  through all ~15 `telemetry/3` call sites — `state` (and thus
+  `state.request_id`) is captured by value into the closure passed to
+  `async_stream_nolink`, so reading it from inside the spawned task works
+  where `Process.get/1` did not. Added a test driving a real agent
+  through a real tool dispatch and asserting the received `tool_call`
+  metadata actually carries the id — the specific gap that let the first
+  version ship: the existing tests only exercised `handle_info/2`'s
+  filtering logic in isolation with hand-built, already-correct metadata,
+  never the real agent-to-task boundary the bug was actually in.
+
+  Testing the filtering logic itself precisely meant a small test
+  redesign: the connection's real `request_id` is opaque from outside
+  `handle_event/3` (fresh `make_ref/0` per ask), so there's no way to
+  fire a *matching* synthetic telemetry event at a real `live_isolated/3`
+  view from a test — exercised `QuestionLive.handle_info/2` as a plain
+  function instead (same pattern already used for `terminate/2` and
+  `handle_async/3`'s `{:exit, reason}` case), which also let both the
+  matching and mismatched cases be asserted precisely, something the old
   fire-at-a-real-view test couldn't do at all.
 
 ## Known gaps (deliberately deferred, not silently skipped)

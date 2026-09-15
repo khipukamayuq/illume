@@ -15,13 +15,20 @@ defmodule Illume.Agent do
   order only when actually sent to the model in `call_model/1`.
 
   An optional `:request_id` opt (any term, opaque to this module) is
-  stashed in the process dictionary at `init/1` and stamped onto every
-  `:telemetry` event's metadata by the shared `telemetry/2` helper —
-  `:telemetry` itself has no per-caller scoping, so this is what lets a
-  consumer with several concurrent agents in flight (`Illume.QuestionLive`)
-  tell its own agent's events apart from another connection's, the same
-  way `Logger.metadata/1` attaches process-local context without
-  threading it through every call site.
+  stored on `state` at `init/1` and stamped onto every `:telemetry`
+  event's metadata by the shared `telemetry/3` helper — `:telemetry`
+  itself has no per-caller scoping, so this is what lets a consumer with
+  several concurrent agents in flight (`Illume.QuestionLive`) tell its
+  own agent's events apart from another connection's. Threaded explicitly
+  through every call site (not read from the process dictionary): tool
+  calls run inside `Task.Supervisor.async_stream_nolink` child processes
+  (`handle_continue({:run_tools, ...}, ...)`), which never inherit the
+  spawning process's dictionary, so a process-dictionary-based version of
+  this shipped once and silently never worked for `[:tool_call, ...]`
+  events — every one of them carried `request_id: nil` (see
+  DECISIONS.md). `state` is captured by the closure passed to
+  `async_stream_nolink`, so reading `state.request_id` from inside a
+  spawned task works correctly where `Process.get/1` did not.
   """
 
   use GenServer
@@ -40,6 +47,7 @@ defmodule Illume.Agent do
     :client,
     :system,
     :from,
+    :request_id,
     messages: [],
     status: :idle,
     iteration: 0,
@@ -55,6 +63,7 @@ defmodule Illume.Agent do
           client: module(),
           system: String.t(),
           from: GenServer.from() | nil,
+          request_id: term(),
           messages: [map()],
           status: :idle | :awaiting_model | :awaiting_tool | :done,
           iteration: non_neg_integer(),
@@ -80,12 +89,12 @@ defmodule Illume.Agent do
   @impl true
   def init(opts) do
     target_dir = Keyword.fetch!(opts, :target_dir)
-    Process.put(:illume_request_id, Keyword.get(opts, :request_id))
 
     state = %__MODULE__{
       target_dir: target_dir,
       client: Keyword.get(opts, :client, Illume.LLM.AnthropicClient),
       system: Prompts.system(target_dir),
+      request_id: Keyword.get(opts, :request_id),
       max_iterations: Keyword.get(opts, :max_iterations, @default_max_iterations),
       tool_timeout: Keyword.get(opts, :tool_timeout, @default_tool_timeout),
       model_timeout: Keyword.get(opts, :model_timeout, @default_model_timeout),
@@ -125,20 +134,20 @@ defmodule Illume.Agent do
           {:noreply, t()} | {:noreply, t(), {:continue, :call_model | {:run_tools, [map()]}}}
   @impl true
   def handle_continue(:call_model, state) do
-    telemetry([:loop_turn, :start], %{iteration: state.iteration})
-    telemetry([:model_call, :start], %{})
+    telemetry([:loop_turn, :start], %{iteration: state.iteration}, state.request_id)
+    telemetry([:model_call, :start], %{}, state.request_id)
 
     case call_model(state) do
       {:ok, %{"content" => content} = body} ->
-        telemetry([:model_call, :stop], %{stop_reason: body["stop_reason"]})
+        telemetry([:model_call, :stop], %{stop_reason: body["stop_reason"]}, state.request_id)
         handle_model_response(content, state)
 
       {:ok, body} ->
-        telemetry([:model_call, :exception], %{reason: :unexpected_response})
+        telemetry([:model_call, :exception], %{reason: :unexpected_response}, state.request_id)
         finish(state, {:error, "unexpected API response: #{inspect(body)}"})
 
       {:error, reason} ->
-        telemetry([:model_call, :exception], %{reason: reason})
+        telemetry([:model_call, :exception], %{reason: reason}, state.request_id)
         finish(state, {:error, format_error(reason)})
     end
   end
@@ -153,10 +162,10 @@ defmodule Illume.Agent do
         on_timeout: :kill_task
       )
       |> Enum.zip(tool_uses)
-      |> Enum.map(&tool_stream_result/1)
+      |> Enum.map(&tool_stream_result(&1, state.request_id))
 
     state = %{state | messages: [%{role: "user", content: tool_results} | state.messages]}
-    telemetry([:loop_turn, :stop], %{iteration: state.iteration})
+    telemetry([:loop_turn, :stop], %{iteration: state.iteration}, state.request_id)
     {:noreply, state, {:continue, :call_model}}
   end
 
@@ -184,11 +193,15 @@ defmodule Illume.Agent do
 
     cond do
       tool_uses == [] ->
-        telemetry([:loop_turn, :stop], %{iteration: state.iteration})
+        telemetry([:loop_turn, :stop], %{iteration: state.iteration}, state.request_id)
         finish(state, {:ok, extract_text(content)})
 
       state.iteration >= state.max_iterations ->
-        telemetry([:loop_turn, :stop], %{iteration: state.iteration, gave_up: true})
+        telemetry(
+          [:loop_turn, :stop],
+          %{iteration: state.iteration, gave_up: true},
+          state.request_id
+        )
 
         finish(
           state,
@@ -208,22 +221,22 @@ defmodule Illume.Agent do
     {:noreply, %{state | status: :done, from: nil}}
   end
 
-  @spec tool_stream_result({{:ok, map()} | {:exit, term()}, map()}) :: map()
-  defp tool_stream_result({{:ok, result}, _tool_use}), do: result
+  @spec tool_stream_result({{:ok, map()} | {:exit, term()}, map()}, term()) :: map()
+  defp tool_stream_result({{:ok, result}, _tool_use}, _request_id), do: result
 
-  defp tool_stream_result({{:exit, reason}, %{"id" => id, "name" => name}}) do
-    telemetry([:tool_call, :exception], %{name: name, reason: reason})
+  defp tool_stream_result({{:exit, reason}, %{"id" => id, "name" => name}}, request_id) do
+    telemetry([:tool_call, :exception], %{name: name, reason: reason}, request_id)
     tool_result(id, "tool #{name} crashed: #{inspect(strip_stacktrace(reason))}", true)
   end
 
   @spec run_tool(map(), t()) :: map()
   defp run_tool(%{"id" => id, "name" => name, "input" => input}, state) do
-    telemetry([:tool_call, :start], %{name: name})
+    telemetry([:tool_call, :start], %{name: name}, state.request_id)
 
     if Tools.allowed?(name) do
       run_allowed_tool(id, name, input, state)
     else
-      telemetry([:tool_call, :exception], %{name: name, reason: :not_allowed})
+      telemetry([:tool_call, :exception], %{name: name, reason: :not_allowed}, state.request_id)
       tool_result(id, "tool #{name} is not allowed", true)
     end
   end
@@ -234,19 +247,19 @@ defmodule Illume.Agent do
 
     case Runner.run(fun, state.tool_timeout) do
       {:ok, {:ok, result}} ->
-        telemetry([:tool_call, :stop], %{name: name})
+        telemetry([:tool_call, :stop], %{name: name}, state.request_id)
         tool_result(id, to_content_string(result), false)
 
       {:ok, {:error, reason}} ->
-        telemetry([:tool_call, :stop], %{name: name, error: true})
+        telemetry([:tool_call, :stop], %{name: name, error: true}, state.request_id)
         tool_result(id, to_content_string(reason), true)
 
       {:error, :timeout} ->
-        telemetry([:tool_call, :exception], %{name: name, reason: :timeout})
+        telemetry([:tool_call, :exception], %{name: name, reason: :timeout}, state.request_id)
         tool_result(id, "tool #{name} timed out", true)
 
       {:error, {:crashed, reason}} ->
-        telemetry([:tool_call, :exception], %{name: name, reason: reason})
+        telemetry([:tool_call, :exception], %{name: name, reason: reason}, state.request_id)
         tool_result(id, "tool #{name} crashed: #{inspect(strip_stacktrace(reason))}", true)
     end
   end
@@ -284,9 +297,9 @@ defmodule Illume.Agent do
   defp strip_stacktrace({reason, stacktrace}) when is_list(stacktrace), do: reason
   defp strip_stacktrace(reason), do: reason
 
-  @spec telemetry([atom()], map()) :: :ok
-  defp telemetry(event_suffix, metadata) do
-    metadata = Map.put(metadata, :request_id, Process.get(:illume_request_id))
+  @spec telemetry([atom()], map(), term()) :: :ok
+  defp telemetry(event_suffix, metadata, request_id) do
+    metadata = Map.put(metadata, :request_id, request_id)
     :telemetry.execute([:illume | event_suffix], %{system_time: System.system_time()}, metadata)
   end
 end
