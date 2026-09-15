@@ -528,11 +528,12 @@ them, either fixed or explicitly documented as deferred.
   nothing of their own to leak, but a direct Ctrl-C on `--serve` also
   bypasses `await_server_exit/1`'s graceful-exit monitor (moot in
   practice — a real MCP client disconnects via stdin EOF, which
-  `--serve` already handles; entry 53). `--serve`'s exposure to this
-  wasn't documented until noticed well after `--serve` itself was
-  built — the original note (entry 41) predates `--serve`'s existence
-  by a week and was never revisited against it. Documented in all
-  three entrypoints' moduledocs now.
+  `--serve` already handles; see the "Stdio EOF restart-storm" note
+  above). `--serve`'s exposure to this wasn't documented until noticed
+  well after `--serve` itself was built — the original note (the "MCP
+  subprocess cleanup" bullet under "Hardening pass 1") predates
+  `--serve`'s existence by a week and was never revisited against it.
+  Documented in all three entrypoints' moduledocs now.
 - No multi-turn conversation support, provider abstraction, or
   multi-user auth/accounts — explicitly out of scope throughout; the web
   UI and MCP server stay single-operator, local-only in spirit.

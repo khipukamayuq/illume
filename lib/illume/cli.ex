@@ -17,23 +17,26 @@ defmodule Illume.CLI do
   loop uses; `--serve` skips the agent loop and question entirely). No
   `ANTHROPIC_API_KEY` is required for `--serve` — no model is called.
   `target_dir` is fixed for the process's whole lifetime via
-  `Application.put_env/3` (see DECISIONS.md entry 50). `--serve` also
-  redirects the default `:logger` handler to stderr before starting the
-  server: `anubis_mcp`'s stdio transport reads this process's raw stdout
-  as newline-delimited JSON-RPC, and Elixir's default Logger handler
-  writes to that same stdout — any log line (even a debug one from
-  `anubis_mcp` itself) corrupts the protocol stream. Found live by the
-  end-to-end smoke test, not by inspection (see DECISIONS.md entry 52).
-  `serve/1` also monitors the started server and exits (rather than
-  blocking forever) once it dies — see `await_server_exit/1` and
-  DECISIONS.md entry 53 for why that's needed.
+  `Application.put_env/3` (see DECISIONS.md's "`target_dir` passed via
+  `Application.put_env/3`" note under "MCP server (Component 1)").
+  `--serve` also redirects the default `:logger` handler to stderr before
+  starting the server: `anubis_mcp`'s stdio transport reads this
+  process's raw stdout as newline-delimited JSON-RPC, and Elixir's
+  default Logger handler writes to that same stdout — any log line (even
+  a debug one from `anubis_mcp` itself) corrupts the protocol stream.
+  Found live by the end-to-end smoke test, not by inspection (see
+  DECISIONS.md's "`anubis_mcp`'s own stdio Logger-redirect is a no-op"
+  note under "MCP server (Component 1)"). `serve/1` also monitors the
+  started server and exits (rather than blocking forever) once it dies —
+  see `await_server_exit/1` and DECISIONS.md's "Stdio EOF restart-storm"
+  note (same section) for why that's needed.
 
   `answer/3` guarantees `Illume.Tools.MCP.stop_clients/0` runs after the
   agent finishes, on both success and error, via `try/after`. It does
   not guarantee cleanup on Ctrl-C: Elixir cannot trap `:sigint` (see
-  DECISIONS.md entry 41), so an interrupted `--mcp` run leaves its
-  spawned `npx`/`uvx` subprocesses running until the VM exits or is
-  force-killed.
+  DECISIONS.md's "MCP subprocess cleanup" note under "Hardening pass 1"),
+  so an interrupted `--mcp` run leaves its spawned `npx`/`uvx`
+  subprocesses running until the VM exits or is force-killed.
 
   The same `:sigint` limitation applies to `--serve`, though with a
   different consequence: `--serve` spawns no subprocess of its own (it
@@ -41,9 +44,10 @@ defmodule Illume.CLI do
   to leak — but a direct Ctrl-C also bypasses `await_server_exit/1`'s
   graceful-exit monitor, the same as it bypasses `stop_clients/0` above.
   In practice this rarely matters: a real MCP client disconnects by
-  closing the pipe (stdin EOF), which `--serve` already handles (see
-  entry 53's restart-storm mitigation) — SIGINT only comes up if a human
-  runs `--serve` directly at a terminal and interrupts it themselves.
+  closing the pipe (stdin EOF), which `--serve` already handles (see the
+  "Stdio EOF restart-storm" mitigation, same section as above) — SIGINT
+  only comes up if a human runs `--serve` directly at a terminal and
+  interrupts it themselves.
 
   Argument parsing and validation (`parse_args/1`, `validate/1`) are pure
   — no I/O, no `System.halt/1` — so they're testable directly; `main/1`
@@ -145,7 +149,8 @@ defmodule Illume.CLI do
   # which sees the same permanent EOF again immediately and typically
   # exhausts the default restart intensity within milliseconds, crashing
   # this supervisor (confirmed against anubis_mcp 2.0.0, the latest
-  # release, and its own issue tracker; see DECISIONS.md entry 53).
+  # release, and its own issue tracker; see DECISIONS.md's "Stdio EOF
+  # restart-storm" note under "MCP server (Component 1)").
   # `main/1`'s process has no link to that tree, so without this monitor it
   # would sleep forever as a zombie once the server dies; this at least
   # exits with a visible error instead.

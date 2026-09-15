@@ -20,8 +20,8 @@ defmodule Illume.Tools do
   twice: the leading-dash rejection here is a cheap fail-fast, and
   `Illume.Tools.Git.git_show/2` is independently safe on its own too —
   both layers are load-bearing; removing either one reopens the
-  argument-injection they close together (see DECISIONS.md entries 42
-  and 46).
+  argument-injection they close together (see DECISIONS.md's "`git_show`
+  hardened against flag injection" note under "Hardening pass 1").
 
   The backend is an explicit argument (threaded from `Illume.CLI` through
   `Illume.Agent`'s state), not process-global mutable configuration — the
@@ -37,7 +37,8 @@ defmodule Illume.Tools do
   "search the whole target dir", `Illume.Tools.Grep.grep_content/2`'s own
   default) before any of them reach `Path.expand/2`/`Path.join/2`, so
   malformed input from an external MCP client can't crash the session
-  (see DECISIONS.md entry 65).
+  (see DECISIONS.md's "Type guards for malformed MCP client input" note
+  under "Hardening pass 2").
   """
 
   alias Illume.Tools.{Filesystem, Git, Grep, MCP, PathConfinement}

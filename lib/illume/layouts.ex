@@ -3,8 +3,9 @@ defmodule Illume.Layouts do
   Root HTML layout for the LiveView page. Ships the CSRF meta tag and the
   vendored `phoenix.js`/`phoenix_live_view.js` client JS (served straight
   from those deps' own `priv/static` by `Illume.Endpoint`'s `Plug.Static`
-  entries — no esbuild/asset pipeline; see DECISIONS.md entry 61) and
-  constructs the `LiveSocket` by hand from their `Phoenix`/`LiveView`
+  entries — no esbuild/asset pipeline; see DECISIONS.md's "the web UI
+  didn't actually work in a real browser" note under "Hardening pass 2")
+  and constructs the `LiveSocket` by hand from their `Phoenix`/`LiveView`
   globals, since neither file is an ES module here.
   """
 

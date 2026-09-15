@@ -7,7 +7,8 @@ defmodule Illume.MCPServer do
   `Illume.CLI`) — not part of `Illume.Application`'s default children.
   `target_dir` is read once from `Application.fetch_env!/2` in `init/2`
   rather than threaded through supervisor start opts, which `anubis_mcp`
-  has no channel for (see DECISIONS.md entry 50).
+  has no channel for (see DECISIONS.md's "`target_dir` passed via
+  `Application.put_env/3`" note under "MCP server (Component 1)").
 
   `init/2` builds `%Anubis.Server.Component.Tool{}` structs directly and
   puts them in `frame.tools`, rather than calling `Frame.register_tool/3`
@@ -16,7 +17,8 @@ defmodule Illume.MCPServer do
   problem, at compile time). Every tool sets `validate_input: fn params ->
   {:ok, params} end` — leaving it `nil` makes `anubis_mcp` silently
   replace real client arguments with `%{}` before dispatch ever sees them.
-  See DECISIONS.md entry 49.
+  See DECISIONS.md's "`%Anubis.Server.Component.Tool{}` built directly"
+  note under "MCP server (Component 1)".
 
   `to_content_string/1`'s catch-all `inspect/1` clause is only ever
   reached today because every tool in `Illume.Tools.specs()` returns a

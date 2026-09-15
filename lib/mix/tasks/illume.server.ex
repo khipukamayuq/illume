@@ -9,23 +9,26 @@ defmodule Mix.Tasks.Illume.Server do
   must go through the same boot path as any other invocation, escript
   included), then `Illume.Endpoint` and its `Phoenix.PubSub` under a
   separate, on-demand `Supervisor` started directly by this task —
-  `Illume.Application`'s own children list is unchanged (see DECISIONS.md
-  entry 57). The plain CLI/escript path never touches this task or
-  `Illume.Endpoint` at all.
+  `Illume.Application`'s own children list is unchanged (see DECISIONS.md's
+  "`mix illume.server` starts `Illume.Endpoint` under its own supervisor"
+  note under "Web front end (Component 3)"). The plain CLI/escript path
+  never touches this task or `Illume.Endpoint` at all.
 
   `target_dir` for the web form is illume's own checkout, hardcoded in
   `Illume.QuestionLive` — never free text from an HTTP request.
 
   Ctrl-C during `mix illume.server` just kills the BEAM without running
   any `terminate/2` cleanup: Elixir cannot trap `:sigint` (see
-  DECISIONS.md entry 41), the same limitation `Illume.CLI`'s moduledoc
-  already documents for `--mcp`/`--serve`.
+  DECISIONS.md's "MCP subprocess cleanup" note under "Hardening pass 1"),
+  the same limitation `Illume.CLI`'s moduledoc already documents for
+  `--mcp`/`--serve`.
 
   Generates a random bearer token once per run and prints it as part of
   the startup URL, checked by `QuestionLive.mount/3`/`handle_event/3` —
   the security review's own proportionate fix for a single-user dev tool
   against a non-browser local client, which `check_origin` can't stop
-  (see DECISIONS.md entry 64).
+  (see DECISIONS.md's "Bearer-token auth on the web endpoint" note under
+  "Hardening pass 2").
   """
 
   @shortdoc "Starts the Illume LiveView web server"

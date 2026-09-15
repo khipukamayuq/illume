@@ -85,8 +85,9 @@ provider for someone else's client. `target_dir` is fixed for the
 process's whole lifetime (no per-call override) and no
 `ANTHROPIC_API_KEY` is required — no model is called in this mode. The
 process blocks until the connected client disconnects, then exits (see
-DECISIONS.md entries 49-53 for the two real bugs — one in `anubis_mcp`
-itself — this mode's implementation had to work around).
+DECISIONS.md's "MCP server (Component 1)" section for the real bugs —
+one in `anubis_mcp` itself — this mode's implementation had to work
+around).
 
 ## Web front end
 
@@ -100,10 +101,15 @@ mix illume.server
 
 Starts a Phoenix/Bandit endpoint at `http://localhost:4000`, on demand —
 `Illume.Application`'s default children are unchanged, so the plain CLI
-never starts a PubSub or an HTTP listener it doesn't need. `target_dir`
+never starts a PubSub or an HTTP listener it doesn't need. Prints a URL
+with a required `?token=...` bearer token — generated fresh each run and
+checked on every request, so open `http://localhost:4000` directly and
+you'll get an unauthorized page; use the printed URL as-is. `target_dir`
 for the web form is a hardcoded compile-time constant (illume's own
 checkout) — the page never accepts an arbitrary filesystem path as
-request input, by design, not by omission (see DECISIONS.md entry 58).
+request input, by design, not by omission (see DECISIONS.md's
+"`target_dir` for the web UI resolves from the module's own source
+path" note under "Web front end (Component 3)").
 The status line is driven by `Illume.Agent`'s existing `:telemetry`
 events, so it reflects what the agent is actually doing (calling the
 model, running a tool) rather than a generic spinner.
@@ -115,8 +121,9 @@ execution, file writes, or commits, enforced by the allow-list rather than
 assumed from any tool's own configuration. No streaming, no persistence.
 MCP *server* mode exposes only the five existing read-only tools
 individually — not the whole agent loop as a single tool. The web front
-end is single-page, single-user-at-a-time in spirit (no auth, meant for
-local use) — not a multi-tenant deployment.
+end is single-page, single-user-at-a-time in spirit — gated by a random
+bearer token printed at startup, not multi-user accounts — not a
+multi-tenant deployment.
 
 ## Testing
 

@@ -4,7 +4,8 @@ defmodule Illume.QA do
   `Illume.Agent` under `Illume.AgentSupervisor` and blocks on `ask/2`.
   Extracted from `Illume.CLI` so Component 3's LiveView can call the same
   question-runner the CLI does, rather than duplicating the
-  supervisor/agent dance (see DECISIONS.md entry 54).
+  supervisor/agent dance (see DECISIONS.md's "Shared question-runner
+  (Component 2)" section).
 
   `opts` is passed straight through to `Illume.Agent`'s `init/1` (e.g.
   `model_timeout`, `tool_timeout`) — not new surface, just not hardcoded

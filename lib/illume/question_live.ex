@@ -5,15 +5,20 @@ defmodule Illume.QuestionLive do
   illume's own checkout, resolved from this module's own source location
   so it's correct regardless of the directory `mix` was invoked from —
   never form input; the spec requires this endpoint never accept an
-  arbitrary filesystem path from an HTTP request (see DECISIONS.md
-  entry 58).
+  arbitrary filesystem path from an HTTP request (see DECISIONS.md's
+  "`target_dir` for the web UI resolves from the module's own source
+  path" note under "Web front end (Component 3)").
 
   `handle_event/3` rejects an `ask` server-side (not just via the
-  client-side `disabled` attribute) when already asking, the question is
-  empty, over 4000 bytes, or not a string (DECISIONS.md entries 63, 65),
-  and requires the bearer token `mix illume.server` prints in its startup
-  URL (checked in both `mount/3` and `handle_event/3`, DECISIONS.md entry
-  64). `:telemetry` events aren't scoped to a request on their own — every
+  client-side `disabled` attribute) when already asking or the question
+  is empty or over 4000 bytes (DECISIONS.md's "Server-side `ask` guard +
+  bounded agent concurrency" note under "Hardening pass 2"), or not a
+  string (DECISIONS.md's "A `/phx:review` re-pass" note, same section,
+  on the non-binary `question` crash it fixed), and requires the bearer
+  token `mix illume.server` prints in its startup URL (checked in both
+  `mount/3` and `handle_event/3`, DECISIONS.md's "Bearer-token auth on
+  the web endpoint" note, same section). `:telemetry` events aren't
+  scoped to a request on their own — every
   connection's handler receives every in-flight agent's events — so each
   `ask` generates a fresh `request_id` (`Illume.Agent`'s own `:request_id`
   opt), and `handle_info/2` only reacts to an event carrying this

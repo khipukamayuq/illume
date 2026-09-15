@@ -27,7 +27,8 @@ defmodule Illume.Tools.Git do
   from being parsed as a flag, so this is safe to call directly —
   `Illume.Tools.validate_input/3`'s leading-dash rejection (run first via
   `Illume.Tools.dispatch/4`) is a fail-fast on top of this, not the only
-  defense (see DECISIONS.md entry 46).
+  defense (see DECISIONS.md's "`git_show` hardened against flag
+  injection" note under "Hardening pass 1").
   """
   @spec git_show(Path.t(), map()) :: {:ok, String.t()} | {:error, String.t()}
   def git_show(target_dir, %{"revision" => revision}) do

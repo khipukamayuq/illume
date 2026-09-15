@@ -9,7 +9,8 @@ defmodule Illume.Tools.MCP do
   only known at runtime) under `Illume.MCPSupervisor`, not declared
   statically in `Illume.Application`. The filesystem and git clients must
   keep distinct `client_info["name"]` values, or they collide on a shared
-  `Anubis.Client.Cache` ETS table (see DECISIONS.md entry 14).
+  `Anubis.Client.Cache` ETS table (see DECISIONS.md's "ETS table collision
+  between same-named clients" note under "Dependency bugs found").
 
   All calls to `Anubis.Client` go through `client_adapter/0`
   (`Application.get_env(:illume, :mcp_client, Illume.Tools.MCP.AnubisClient)`)
@@ -21,10 +22,12 @@ defmodule Illume.Tools.MCP do
   through `Illume.Tools.PathConfinement.within?/2`: anything that resolves
   outside `target_dir`, or isn't already absolute, is dropped and reported
   via `[:illume, :mcp, :confinement_violation]` telemetry rather than
-  silently ignored (see DECISIONS.md entries 39 and 47). It also
+  silently ignored (see DECISIONS.md's "MCP `search_files` given its own
+  confinement layer" note under "Hardening pass 1"). It also
   distinguishes the server's own "no matches" from confinement dropping
   every match it returned, so the model isn't told "there is no such
-  file" when matches existed but were suppressed.
+  file" when matches existed but were suppressed (same section, the
+  Low-severity item on distinguishing the two).
   """
 
   alias Illume.Tools.PathConfinement
