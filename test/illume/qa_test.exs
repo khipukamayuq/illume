@@ -23,6 +23,10 @@ defmodule Illume.QATest do
   test "returns an :error result unchanged when the model call fails", %{tmp_dir: tmp_dir} do
     expect(ClientMock, :create, fn _params -> {:error, :boom} end)
 
-    assert {:error, _reason} = QA.ask(tmp_dir, "a question", :direct, client: ClientMock)
+    # `:boom` isn't `:timeout` or `{:crashed, _}` or an exception, so
+    # `Illume.Agent`'s `format_error/1` falls through to its catch-all
+    # `inspect/1` clause — asserting that exact string (not a wildcard)
+    # pins down which branch actually ran.
+    assert {:error, ":boom"} = QA.ask(tmp_dir, "a question", :direct, client: ClientMock)
   end
 end
