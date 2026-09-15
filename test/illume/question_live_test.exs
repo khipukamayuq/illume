@@ -2,7 +2,9 @@ defmodule Illume.QuestionLiveTest do
   use ExUnit.Case, async: false
 
   import Mox
+  import Phoenix.ConnTest
   import Phoenix.LiveViewTest
+  import Plug.Conn
 
   alias Illume.LLM.ClientMock
   alias Illume.QuestionLive
@@ -124,6 +126,47 @@ defmodule Illume.QuestionLiveTest do
 
       {:ok, view, _html} = live_isolated(conn, QuestionLive)
       render_submit(view, "ask", %{"question" => String.duplicate("a", 4_001)})
+
+      refute render(view) =~ "Thinking"
+    end
+  end
+
+  describe "bearer-token auth (P2-T3)" do
+    # `live_isolated/3` never routes real query params (it always passes
+    # the literal atom `:not_mounted_at_router` to `mount/3`), so these
+    # go through the real router via `live/2` instead — the only way to
+    # actually exercise the `?token=...` query param this check relies on.
+    setup do
+      Application.put_env(:illume, :web_token, "expected-token")
+      on_exit(fn -> Application.delete_env(:illume, :web_token) end)
+      :ok
+    end
+
+    test "mounting with no token does not render the ask form" do
+      {:ok, _view, html} = build_conn() |> get("/") |> live()
+
+      refute html =~ "Ask a question about this codebase"
+      assert html =~ "Unauthorized"
+    end
+
+    test "mounting with the wrong token does not render the ask form" do
+      {:ok, _view, html} = build_conn() |> get("/?token=wrong") |> live()
+
+      refute html =~ "Ask a question about this codebase"
+      assert html =~ "Unauthorized"
+    end
+
+    test "mounting with the correct token renders the ask form" do
+      {:ok, _view, html} = build_conn() |> get("/?token=expected-token") |> live()
+
+      assert html =~ "Ask a question about this codebase"
+    end
+
+    test "an ask event while unauthorized does not call Illume.QA.ask/4" do
+      deny(ClientMock, :create, 1)
+
+      {:ok, view, _html} = build_conn() |> get("/?token=wrong") |> live()
+      render_submit(view, "ask", %{"question" => "hello?"})
 
       refute render(view) =~ "Thinking"
     end

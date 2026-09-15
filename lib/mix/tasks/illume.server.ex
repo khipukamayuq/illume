@@ -32,6 +32,17 @@ defmodule Mix.Tasks.Illume.Server do
     endpoint_config = Application.get_env(:illume, Illume.Endpoint, [])
     Application.put_env(:illume, Illume.Endpoint, Keyword.put(endpoint_config, :server, true))
 
+    # Generated once per `mix illume.server` run and checked by
+    # `QuestionLive.mount/3` — the only realistic delivery path for M2
+    # (an unauthenticated local endpoint driving billed Anthropic calls)
+    # is a non-browser local client with no `Origin` header, which
+    # `check_origin` can't stop; a shared token is the security review's
+    # own proportionate fix for a single-user dev tool (see DECISIONS.md
+    # entry 64). Same one-shot `Application.put_env/3` pattern as
+    # `mcp_server_target_dir` (DECISIONS.md #50).
+    token = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+    Application.put_env(:illume, :web_token, token)
+
     {:ok, _apps} = Application.ensure_all_started(:illume)
 
     {:ok, _pid} =
@@ -42,7 +53,7 @@ defmodule Mix.Tasks.Illume.Server do
       )
 
     port = Keyword.fetch!(Illume.Endpoint.config(:http), :port)
-    Mix.shell().info("Illume running at http://localhost:#{port}")
+    Mix.shell().info("Illume running at http://localhost:#{port}?token=#{token}")
 
     Process.sleep(:infinity)
   end
