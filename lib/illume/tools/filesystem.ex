@@ -4,11 +4,10 @@ defmodule Illume.Tools.Filesystem do
   path is confined to the target directory the CLI was invoked with.
   """
 
-  alias Illume.Tools.PathConfinement
+  alias Illume.Tools.{FileDiscovery, PathConfinement}
 
   @max_bytes 300_000
   @max_results 200
-  @ignored_dirs ~w(.git _build deps node_modules .elixir_ls cover)
 
   @doc """
   Read a file's contents as text. `input` is `%{"path" => relative_path}`.
@@ -76,6 +75,7 @@ defmodule Illume.Tools.Filesystem do
   @spec search_files(Path.t(), map()) :: {:ok, [String.t()]} | {:error, String.t()}
   def search_files(target_dir, %{"pattern" => pattern}) do
     root = Path.expand(target_dir)
+    allowed = MapSet.new(FileDiscovery.list(root))
 
     matches =
       root
@@ -83,8 +83,8 @@ defmodule Illume.Tools.Filesystem do
       |> Path.wildcard(match_dot: false)
       |> Enum.map(&Path.expand/1)
       |> Enum.filter(&PathConfinement.within?(&1, root))
-      |> Enum.reject(&ignored?(&1, root))
       |> Enum.map(&Path.relative_to(&1, root))
+      |> Enum.filter(&(&1 in allowed))
       |> Enum.sort()
       |> Enum.take(@max_results)
 
@@ -92,12 +92,4 @@ defmodule Illume.Tools.Filesystem do
   end
 
   def search_files(_target_dir, _input), do: {:error, "missing required input: pattern"}
-
-  @spec ignored?(Path.t(), Path.t()) :: boolean()
-  defp ignored?(path, root) do
-    path
-    |> Path.relative_to(root)
-    |> Path.split()
-    |> Enum.any?(&(&1 in @ignored_dirs))
-  end
 end
