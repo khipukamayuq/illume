@@ -87,6 +87,48 @@ defmodule Illume.QuestionLiveTest do
     assert socket.assigns.asking? == false
   end
 
+  describe "server-side ask guard" do
+    test "a second ask while asking? is already true is a no-op", %{conn: conn} do
+      test_pid = self()
+
+      expect(ClientMock, :create, fn _params ->
+        send(test_pid, :model_called)
+        Process.sleep(150)
+        text_response("first answer")
+      end)
+
+      {:ok, view, _html} = live_isolated(conn, QuestionLive)
+      render_submit(view, "ask", %{"question" => "first?"})
+      assert_receive :model_called, 500
+
+      # Illume.QA.ask/4's Mox expectation above only allows exactly one
+      # call — this second submit would blow past that (via
+      # `verify_on_exit!`) if the server-side `asking?` guard didn't
+      # short-circuit before ever starting a second async task.
+      render_submit(view, "ask", %{"question" => "second?"})
+
+      assert wait_for(fn -> render(view) =~ "first answer" end)
+    end
+
+    test "an empty question does not call Illume.QA.ask/4", %{conn: conn} do
+      deny(ClientMock, :create, 1)
+
+      {:ok, view, _html} = live_isolated(conn, QuestionLive)
+      render_submit(view, "ask", %{"question" => "   "})
+
+      refute render(view) =~ "Thinking"
+    end
+
+    test "an oversized question does not call Illume.QA.ask/4", %{conn: conn} do
+      deny(ClientMock, :create, 1)
+
+      {:ok, view, _html} = live_isolated(conn, QuestionLive)
+      render_submit(view, "ask", %{"question" => String.duplicate("a", 4_001)})
+
+      refute render(view) =~ "Thinking"
+    end
+  end
+
   defp wait_for(fun, retries \\ 20)
   defp wait_for(_fun, 0), do: false
 

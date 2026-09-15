@@ -15,6 +15,13 @@ defmodule Illume.QuestionLive do
 
   @target_dir Path.expand("../..", __DIR__)
 
+  # Server-side enforcement of the guard the UI already displays
+  # client-side (disabling the form while `asking?`) — a non-browser
+  # client can send `phx-submit` events directly over the socket, so the
+  # client-side `disabled` attribute alone is not a real guard (see
+  # DECISIONS.md entry 63).
+  @max_question_bytes 4_000
+
   @telemetry_events [
     [:illume, :model_call, :start],
     [:illume, :tool_call, :start],
@@ -93,14 +100,20 @@ defmodule Illume.QuestionLive do
 
   @impl true
   def handle_event("ask", %{"question" => question}, socket) do
-    opts = qa_opts()
+    trimmed = String.trim(question)
 
-    socket =
-      socket
-      |> assign(question: question, answer: nil, asking?: true, status_line: "Thinking…")
-      |> start_async(:ask, fn -> Illume.QA.ask(@target_dir, question, :direct, opts) end)
+    if socket.assigns.asking? or trimmed == "" or byte_size(trimmed) > @max_question_bytes do
+      {:noreply, socket}
+    else
+      opts = qa_opts()
 
-    {:noreply, socket}
+      socket =
+        socket
+        |> assign(question: trimmed, answer: nil, asking?: true, status_line: "Thinking…")
+        |> start_async(:ask, fn -> Illume.QA.ask(@target_dir, trimmed, :direct, opts) end)
+
+      {:noreply, socket}
+    end
   end
 
   # Test-only seam, same shape as `Illume.Tools.MCP.client_adapter/0`: lets
