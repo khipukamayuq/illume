@@ -405,6 +405,29 @@ them, either fixed or explicitly documented as deferred.
   letting `grep -r` walk the directory itself to being handed the
   discovered file list directly, batched (500 files per invocation) to
   avoid one unbounded argument list on a very large target.
+- The global `:telemetry` handler `QuestionLive.mount/3` attaches gave
+  every open LiveView connection every in-flight agent's events — the
+  `asking?` guard only stopped an unrelated event from being displayed,
+  not from being received, so one connection's tool-call names could
+  flash on another's screen. Fixed with a `request_id` (`make_ref/0`,
+  fresh per `ask`) threaded through the existing `opts` pass-through
+  `Illume.QA.ask/4` already had (no new parameter needed there) into
+  `Illume.Agent`'s `init/1`, which stashes it in the process
+  dictionary — read back by the one private `telemetry/2` helper every
+  emission already goes through, so all ~15 call sites picked it up
+  without individually threading it, the same way `Logger.metadata/1`
+  attaches process-local context without touching every log call.
+  `QuestionLive.handle_info/2` now requires the incoming event's
+  `request_id` to match the connection's own current one, not just
+  `asking?`. Testing this precisely meant a small test redesign: the
+  connection's real `request_id` is opaque from outside `handle_event/3`
+  (fresh `make_ref/0` per ask), so there's no way to fire a *matching*
+  synthetic telemetry event at a real `live_isolated/3` view from a
+  test — exercised `handle_info/2` as a plain function instead (same
+  pattern already used for `terminate/2` and `handle_async/3`'s
+  `{:exit, reason}` case), which also let both the matching and
+  mismatched cases be asserted precisely, something the old
+  fire-at-a-real-view test couldn't do at all.
 
 ## Known gaps (deliberately deferred, not silently skipped)
 
@@ -420,10 +443,3 @@ them, either fixed or explicitly documented as deferred.
   mitigated (the escript exits cleanly instead of hanging) but not fixed
   — the underlying restart storm still happens on every client
   disconnect. Filing this upstream is future work.
-- The global `:telemetry` handler `QuestionLive.mount/3` attaches leaks
-  other sessions' tool *names* (never paths/content) across concurrent
-  LiveView connections — the `asking?` guard stops an unrelated event
-  from being displayed, not from being received. Real but low-impact;
-  properly scoping it means threading a request/agent identifier through
-  `Illume.Agent`'s telemetry vocabulary project-wide, judged out of
-  scope for the passes so far.

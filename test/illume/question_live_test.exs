@@ -117,25 +117,59 @@ defmodule Illume.QuestionLiveTest do
              )
     end
 
-    test "a tool_call telemetry event renders the \"Running: <name>\" status line", %{
-      conn: conn
-    } do
-      test_pid = self()
+    # The real `request_id` a connection is waiting on is generated fresh
+    # per `ask` (`make_ref()`) and opaque from outside `handle_event/3` —
+    # there's no way for a test to fire a *matching* synthetic
+    # `:telemetry.execute/3` call at a real `live_isolated/3` view from
+    # here. Exercised as a plain function call instead (matching the
+    # `terminate/2` test above), which also lets both the matching and
+    # non-matching cases be asserted precisely.
+    test "a tool_call telemetry event renders the \"Running: <name>\" status line when it matches the in-flight request" do
+      request_id = make_ref()
 
-      expect(ClientMock, :create, fn _params ->
-        send(test_pid, :model_called)
-        Process.sleep(150)
-        text_response("done")
-      end)
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          asking?: true,
+          current_request_id: request_id,
+          status_line: nil
+        }
+      }
 
-      {:ok, view, _html} = live_isolated(conn, QuestionLive)
-      render_submit(view, "ask", %{"question" => "slow?"})
-      assert_receive :model_called, 500
+      {:noreply, socket} =
+        QuestionLive.handle_info(
+          {:illume_telemetry, [:illume, :tool_call, :start], %{},
+           %{
+             name: "read_file",
+             request_id: request_id
+           }},
+          socket
+        )
 
-      :telemetry.execute([:illume, :tool_call, :start], %{}, %{name: "read_file"})
+      assert socket.assigns.status_line == "Running: read_file"
+    end
 
-      assert render(view) =~ "Running: read_file"
-      assert render_async(view, 500) =~ "done"
+    test "a tool_call telemetry event from a different request does not update the status line" do
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          asking?: true,
+          current_request_id: make_ref(),
+          status_line: nil
+        }
+      }
+
+      {:noreply, socket} =
+        QuestionLive.handle_info(
+          {:illume_telemetry, [:illume, :tool_call, :start], %{},
+           %{
+             name: "read_file",
+             request_id: make_ref()
+           }},
+          socket
+        )
+
+      assert socket.assigns.status_line == nil
     end
   end
 
