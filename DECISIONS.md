@@ -1216,6 +1216,45 @@ Two doc-only fixes from the review's Suggestions: reworded a comment in `handle_
 
 Remaining Suggestions from the review (untested `start_child` failure branch, `to_content_string/1`'s `inspect/1` catch-all, committed dev/test secrets, the `:web_token`-unset-fails-open default, the `mcp_server_boot_test.exs` transport-fidelity gap, comment/DECISIONS.md ticket-ID density) are tracked in the triage file (`.claude/plans/mcp-server-and-web-hardening/reviews/mcp-server-and-web-hardening-triage.md`) and addressed in subsequent commits where a real code change was warranted.
 
+### 74. More post-review triage: runtime dev secret, `to_content_string/1` comment, `start_child` test investigated and skipped
+**Date:** 2026-09-15 · **Status:** Done
+Continuing entry 73's triage of the `/phx:review` re-pass's Suggestions:
+
+- **`config/dev.exs`'s `secret_key_base` moved to `config/runtime.exs`**,
+  random per boot (`:crypto.strong_rand_bytes(48) |> Base.encode64()`,
+  64 bytes exactly — meets `Plug.Session`'s minimum, entry 61), overridable
+  via `ILLUME_SECRET_KEY_BASE`. No longer committed. `config/test.exs`
+  keeps its own static committed value deliberately — nothing in the test
+  suite needs cross-run persistence, and the review's own suggested fix
+  explicitly scoped this change to non-test environments. Verified
+  `config/runtime.exs` actually loads for a plain `mix illume.server`
+  invocation (not just `mix release`) by booting the real server and
+  confirming a request succeeds before committing this.
+- **`to_content_string/1`'s `inspect/1` catch-all** (`lib/illume/mcp_server.ex`)
+  got the comment the review suggested — documents the assumption (every
+  current tool returns a string or list of strings) so a future tool
+  returning something else is a visible design question, not a silent
+  behavior change.
+- **`Illume.QA.ask/4`'s `start_child` failure branch: investigated, no
+  safe test found, left undone** (as the plan's own task text already
+  allowed). The review's own suggested fix — a test-scoped supervisor
+  with `max_children: 0` — doesn't actually work here: `Illume.QA.ask/4`
+  hardcodes the module name `Illume.AgentSupervisor` directly, with no
+  injection seam to substitute a test-scoped one. The only way to hit the
+  real branch is saturating the actual, application-wide
+  `Illume.AgentSupervisor` to its real `max_children: 20` — but that
+  supervisor is shared with every other concurrently-running async test
+  in the suite, so deliberately filling it risks breaking unrelated tests
+  under `mix test`'s default `async: true` scheduling. Same category of
+  risk as entry 70's stdio restart-storm finding — documented and
+  skipped rather than forced.
+
+The remaining Suggestions from the review (`:web_token`-unset-fails-open,
+`mcp_server_boot_test.exs`'s transport-fidelity gap, ticket-ID density in
+comments) resolve to "no code change" — each was reviewed and judged
+correctly scoped/documented already. Full triage record in
+`.claude/plans/mcp-server-and-web-hardening/reviews/mcp-server-and-web-hardening-triage.md`.
+
 ## Known gaps (deliberately deferred, not silently skipped)
 
 - `grep_content` can pick up non-ignored binary/cache directories (e.g.
